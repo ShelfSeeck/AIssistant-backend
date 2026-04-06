@@ -52,6 +52,7 @@ from db import (
     list_sessions_by_project,
     mark_messages_not_latest_after,
     switch_message_version,
+    touch_session_timestamp,
 )
 
 # 从 tool.py 导入工具相关函数和注册表
@@ -729,6 +730,7 @@ def _handle_chat_turn(
 
         # AI 表示已完成 → 退出循环，返回最终答案
         if is_final:
+            touch_session_timestamp(payload.sid, db_path=DATABASE_PATH)
             return ChatSendResponse(
                 request_id=request_id,
                 retry_of_request_id=payload.retry_of_request_id,
@@ -832,7 +834,8 @@ class ProjectItem(BaseModel):
     """项目信息"""
     pid: str
     projectname: str
-    created_at: str
+    timestamp: float
+    created_at: float
 
 
 class ProjectListResponse(BaseModel):
@@ -844,7 +847,8 @@ class SessionItem(BaseModel):
     """会话信息"""
     sid: str
     sessionname: str
-    created_at: str
+    timestamp: float
+    created_at: float
 
 
 class SessionListResponse(BaseModel):
@@ -857,7 +861,8 @@ class MessageItem(BaseModel):
     msg_id: str
     kind: str
     raw_json: str
-    msg_time: str
+    timestamp: float
+    created_at: float
     parent_msg_id: str | None = None
     version: int = 1
     is_latest: int = 1
@@ -888,7 +893,8 @@ def list_user_projects(
             ProjectItem(
                 pid=p["pid"],
                 projectname=p["projectname"],
-                created_at=str(p["created_at"]),
+                timestamp=float(p["timestamp"]),
+                created_at=float(p["created_at"]),
             )
             for p in projects
         ]
@@ -922,7 +928,8 @@ def list_project_sessions(
             SessionItem(
                 sid=s["sid"],
                 sessionname=s["sessionname"],
-                created_at=str(s["created_at"]),
+                timestamp=float(s["timestamp"]),
+                created_at=float(s["created_at"]),
             )
             for s in sessions
         ]
@@ -959,7 +966,8 @@ def list_session_messages(
                 msg_id=m["msg_id"],
                 kind=m["kind"],
                 raw_json=m["raw_json"],
-                msg_time=m["msg_time"],
+                timestamp=float(m["timestamp"]),
+                created_at=float(m["created_at"]),
                 parent_msg_id=m.get("parent_msg_id"),
                 version=m.get("version", 1),
                 is_latest=m.get("is_latest", 1),
@@ -1091,10 +1099,10 @@ def regenerate_message(
         )
 
     # 将目标消息之后的所有消息标记为非最新
-    target_timestamp = target_msg["msg_timestamp"]
+    target_timestamp = target_msg["timestamp"]
     mark_messages_not_latest_after(
         sid=sid,
-        msg_timestamp=target_timestamp,
+        timestamp=target_timestamp,
         db_path=DATABASE_PATH,
     )
 
@@ -1192,6 +1200,7 @@ def regenerate_message(
 
         # AI 表示已完成
         if is_final:
+            touch_session_timestamp(sid, db_path=DATABASE_PATH)
             return RegenerateResponse(
                 request_id=request_id,
                 assistant_message=output.answer,
@@ -1235,7 +1244,8 @@ class MessageVersionItem(BaseModel):
     raw_json: str
     version: int
     is_latest: int
-    msg_time: str
+    timestamp: float
+    created_at: float
 
 
 class MessageVersionsResponse(BaseModel):
@@ -1273,7 +1283,8 @@ def get_message_versions(
                 raw_json=v["raw_json"],
                 version=v["version"],
                 is_latest=v["is_latest"],
-                msg_time=v["msg_time"],
+                timestamp=float(v["timestamp"]),
+                created_at=float(v["created_at"]),
             )
             for v in versions
         ]

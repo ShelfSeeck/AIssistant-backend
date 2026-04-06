@@ -50,7 +50,7 @@ class UserRecord(TypedDict):
     username: str
     email: str
     password_hash: str
-    created_at: str
+    created_at: float
 
 
 class TokenPayload(TypedDict):
@@ -84,7 +84,7 @@ class UserOut(BaseModel):
     uuid: str
     username: str
     email: str
-    created_at: str
+    created_at: float
 
 
 class TokenPair(BaseModel):
@@ -227,7 +227,7 @@ def register_user(payload: RegisterRequest) -> UserOut:
         uuid=created_user["uuid"],
         username=created_user["username"],
         email=created_user["email"],
-        created_at=created_user["created_at"],
+        created_at=float(created_user["created_at"]),
     )
 
 
