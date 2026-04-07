@@ -1,54 +1,36 @@
 """
-tool.py - 工具函数定义模块
+tool.py - AI 工具定义与组装模块
 
-本模块专门用于定义供 AI Agent 调用的工具函数。
-所有工具函数通过 register_tool 装饰器注册到全局工具注册表，
-然后由 loop.py 在创建 Agent 时通过 Tool(...) 包装后传入。
+本模块职责：
+1. 定义工具函数的执行逻辑（文件读取、目录遍历等）。
+2. 维护工具注册表（register_tool / _TOOL_REGISTRY / _REGISTERED_TOOL_NAMES）。
+3. 处理工具权限边界（ALLOWED_TOOLS_GLOBAL + effective_tools）。
+4. 提供 build_tools，把注册函数包装为 Agent 可用的 Tool 列表。
 
-架构设计：
-- tool.py: 定义工具函数的纯实现 + 工具注册表 + 全局工具权限配置
-- loop.py: Agent 创建、工具绑定（使用 tools=[Tool(...)]）、路由逻辑
+与其他模块关系：
+- loop.py：负责模型编排与重试，通过 build_tools 注入可调用工具。
+- data.py / main.py：负责路由和应用挂载，不参与工具执行。
+- db.py：不直接耦合；工具如需业务依赖，统一通过 RunContext.deps 获取。
 
-这种分离避免了循环导入问题，同时让工具的添加/修改更加清晰。
+如何新增一个可被 AI 调用的工具：
+1. 在本文件新增函数，首参使用 ctx: RunContext[Any]。
+2. 返回值约定为 dict[str, Any]（成功/错误都走结构化返回）。
+3. 使用 @register_tool 装饰器注册，函数名即工具名。
+4. 确认工具名在 ALLOWED_TOOLS_GLOBAL 和请求 allowed_tools 的交集内。
+5. 无需改 loop.py，Agent 启动时会通过 build_tools 自动纳入。
 
-数据流概览：
-┌─────────────────────────────────────────────────────────────────────┐
-│                          工具调用数据流                               │
-├─────────────────────────────────────────────────────────────────────┤
-│  1. 注册阶段 (启动时)                                                 │
-│     @register_tool 装饰器                                            │
-│         ↓                                                           │
-│     函数名 → _REGISTERED_TOOL_NAMES (集合)                           │
-│     函数对象 → _TOOL_REGISTRY (字典)                                  │
-│         ↓                                                           │
-│     loop.py 调用 get_tool_registry() 获取并包装为 Tool 对象           │
-│                                                                     │
-│  2. 权限过滤阶段 (每次请求)                                           │
-│     ALLOWED_TOOLS_GLOBAL (后端全局配置)                               │
-│         ∩                                                           │
-│     request.allowed_tools (前端请求指定)                              │
-│         ↓                                                           │
-│     effective_tools() → 最终可用工具集合                              │
-│                                                                     │
-│  3. 调用阶段 (AI 决定调用工具时)                                       │
-│     AI 模型生成参数 (path, encoding 等)                               │
-│         +                                                           │
-│     RunContext.deps (开发者注入的依赖: user_id, db 等)                │
-│         ↓                                                           │
-│     工具函数执行 → 返回 dict 结果 → AI 模型接收并继续对话              │
-└─────────────────────────────────────────────────────────────────────┘
-
-参考 Pydantic AI 文档：
-- 工具定义在独立模块时，使用 tools=[Tool(fn)] 在 Agent 构造函数中传入
-- Tool 包装器支持 prepare 参数用于动态过滤工具
+调用链路：
+register_tool -> build_tools -> Agent(tools=...) -> prepare_tools 过滤 -> guarded 校验 -> 工具函数执行
 """
 
 from __future__ import annotations
 
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
 from pydantic_ai import RunContext
+from pydantic_ai.tools import Tool
 
 from config import BASE_DIR
 
@@ -73,32 +55,20 @@ ALLOWED_TOOLS_GLOBAL: set[str] | None = {
 # 已注册工具名称集合，用于快速查找和权限校验
 _REGISTERED_TOOL_NAMES: set[str] = set()
 
-# 工具函数注册表：name → function，由 loop.py 读取并包装为 Tool 对象
+# 工具函数注册表：name → function，由 build_tools 读取并包装为 Tool 对象
 _TOOL_REGISTRY: dict[str, Any] = {}
 
 
 def register_tool(func: Any) -> Any:
     """
-    工具注册装饰器 - 将函数注册到全局工具表
-    
-    数据流：
-    ┌─────────────────────────────────────────────────────────┐
-    │  @register_tool                                         │
-    │  def my_tool(ctx, param): ...                           │
-    │       ↓                                                 │
-    │  func.__name__ ("my_tool")                              │
-    │       ↓                                                 │
-    │  _REGISTERED_TOOL_NAMES.add("my_tool")  # 名称注册      │
-    │  _TOOL_REGISTRY["my_tool"] = func       # 函数存储      │
-    │       ↓                                                 │
-    │  返回原函数（不修改）                                    │
-    └─────────────────────────────────────────────────────────┘
-    
-    输入：被装饰的函数
-    输出：原函数（装饰器透传）
-    副作用：填充 _REGISTERED_TOOL_NAMES 和 _TOOL_REGISTRY
-    
-    注意：工具函数签名必须为 (ctx: RunContext[Any], ...params) -> dict
+    工具注册装饰器。
+
+    行为：
+    1. 使用函数名作为工具名写入 _REGISTERED_TOOL_NAMES。
+    2. 将函数对象写入 _TOOL_REGISTRY。
+    3. 返回原函数，不改变调用方式。
+
+    约定：工具函数签名应为 (ctx: RunContext[Any], ...params) -> dict[str, Any]。
     """
     tool_name = func.__name__
     _REGISTERED_TOOL_NAMES.add(tool_name)
@@ -108,49 +78,82 @@ def register_tool(func: Any) -> Any:
 
 def get_registered_tool_names() -> set[str]:
     """
-    获取所有已注册工具名称
-    
-    输入：无
-    输出：工具名称集合的副本（防止外部修改内部状态）
-    调用方：loop.py 中的权限校验逻辑
+    返回已注册工具名集合的副本。
+
+    返回副本而非原集合，避免外部代码误改内部注册状态。
     """
     return set(_REGISTERED_TOOL_NAMES)
 
 
 def get_tool_registry() -> dict[str, Any]:
     """
-    获取工具注册表
-    
-    输入：无
-    输出：{工具名: 函数对象} 字典的副本
-    调用方：loop.py._build_tools() 用于构建 Agent 的工具列表
+    返回工具注册表副本。
+
+    键为工具名，值为函数对象，供 build_tools 进行统一包装。
     """
     return dict(_TOOL_REGISTRY)
 
 
+def _create_guarded_tool(func: Any, tool_name: str) -> Any:
+    """为工具函数创建带安全检查的包装器。"""
+
+    @wraps(func)
+    def guarded(ctx: RunContext[Any], *args: Any, **kwargs: Any) -> dict[str, Any]:
+        deps = ctx.deps
+        registered_tools = get_registered_tool_names()
+
+        if tool_name not in registered_tools:
+            return {
+                "error": "tool_invalid",
+                "tool_name": tool_name,
+            }
+
+        if ALLOWED_TOOLS_GLOBAL is not None and tool_name not in ALLOWED_TOOLS_GLOBAL:
+            return {
+                "error": "tool_not_enabled",
+                "tool_name": tool_name,
+            }
+
+        tool_mode = getattr(deps, "tool_mode", None)
+        tool_mode_value = getattr(tool_mode, "value", tool_mode)
+        if tool_mode_value == "off":
+            return {
+                "error": "tools_disabled",
+                "tool_name": tool_name,
+            }
+
+        allowed_tools = getattr(deps, "allowed_tools", None)
+        if not allowed_tools or tool_name not in allowed_tools:
+            return {
+                "error": "tool_not_allowed",
+                "tool_name": tool_name,
+            }
+
+        return func(ctx, *args, **kwargs)
+
+    return guarded
+
+
+def build_tools() -> list[Tool[Any]]:
+    """将注册表中的工具函数包装后构建为 Pydantic AI Tool 列表。"""
+    tool_registry = get_tool_registry()
+    tools: list[Tool[Any]] = []
+    for tool_name, func in tool_registry.items():
+        guarded_func = _create_guarded_tool(func, tool_name)
+        tools.append(Tool(guarded_func))
+    return tools
+
+
 def effective_tools(request_allowed_tools: list[str] | None) -> set[str]:
     """
-    计算本次请求的有效工具集合（权限交集）
-    
-    数据流：
-    ┌─────────────────────────────────────────────────────────┐
-    │  _REGISTERED_TOOL_NAMES          (所有已注册的工具)      │
-    │       ∩                                                 │
-    │  ALLOWED_TOOLS_GLOBAL            (后端白名单)            │
-    │       ↓                                                 │
-    │  global_allowed                  (后端允许的工具)        │
-    │       ∩                                                 │
-    │  request_allowed_tools           (前端请求指定)          │
-    │       ↓                                                 │
-    │  返回最终可用工具集合                                    │
-    └─────────────────────────────────────────────────────────┘
-    
-    输入：request_allowed_tools - 前端请求中指定的工具列表（可选）
-    输出：本次请求实际可用的工具名称集合
-    
-    安全设计：
-    - 后端 ALLOWED_TOOLS_GLOBAL 是硬边界，前端无法突破
-    - 前端只能在后端允许范围内进一步限制
+    计算本次请求实际可用的工具集合。
+
+    规则：
+    1. 先取已注册工具。
+    2. 再应用后端全局白名单 ALLOWED_TOOLS_GLOBAL。
+    3. 最后与请求级 allowed_tools 求交集。
+
+    结论：前端只能缩小工具范围，不能突破后端白名单。
     """
     # 第一层：已注册的工具
     registered_tools = set(_REGISTERED_TOOL_NAMES)
@@ -190,7 +193,7 @@ def _resolve_workspace_path(raw_path: str) -> Path:
 # 注意：
 # 1. 工具函数的第一个参数必须是 RunContext（Pydantic AI 要求）
 # 2. 这里使用 RunContext[Any] 避免循环导入，实际类型是 RunContext[ChatDeps]
-# 3. 运行时的类型安全由 loop.py 中的 guarded wrapper 保证
+# 3. 运行时权限与安全校验由本模块的 _create_guarded_tool 保证
 # ============================================================
 
 

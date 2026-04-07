@@ -1,3 +1,4 @@
+#后续可能需要处理好旧refreshtoken的吊销
 import hashlib
 import hmac
 import os
@@ -18,11 +19,12 @@ from config import (
     JWT_SECRET,
     REFRESH_TOKEN_EXPIRE_DAYS,
 )
-from db import create_user, get_user_by_email, get_user_by_uuid
+from db import DatabaseFacade
 
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 security = HTTPBearer(auto_error=False)
+db = DatabaseFacade(db_path=DATABASE_PATH)
 
 REFRESH_COOKIE_NAME = os.getenv("REFRESH_COOKIE_NAME", "refresh_token")
 REFRESH_COOKIE_PATH = os.getenv("REFRESH_COOKIE_PATH", "/auth")
@@ -212,15 +214,14 @@ def _clear_refresh_cookie(response: Response) -> None:
 
 @router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
 def register_user(payload: RegisterRequest) -> UserOut:
-    existing = get_user_by_email(payload.email, db_path=DATABASE_PATH)
+    existing = db.users.get_by_email(payload.email)
     if existing:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already exists")
 
-    created = create_user(
+    created = db.users.create(
         username=payload.username,
         email=payload.email,
         password_hash=hash_password(payload.password),
-        db_path=DATABASE_PATH,
     )
     created_user = cast(UserRecord, created)
     return UserOut(
@@ -234,7 +235,7 @@ def register_user(payload: RegisterRequest) -> UserOut:
 @router.post("/login", response_model=AccessTokenOut)
 def login_user(payload: LoginRequest, response: Response) -> AccessTokenOut:
     """登录流程：验证用户凭据，生成访问令牌和刷新令牌，并通过 HttpOnly Cookie 返回刷新令牌。"""
-    user = get_user_by_email(payload.email, db_path=DATABASE_PATH)
+    user = db.users.get_by_email(payload.email)
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     user_record = cast(UserRecord, user)
@@ -257,7 +258,7 @@ def refresh_access_token(request: Request, response: Response) -> AccessTokenOut
     token_payload = decode_token(refresh_token, expected_type="refresh")
     user_uuid = token_payload["sub"]
 
-    user = get_user_by_uuid(user_uuid, db_path=DATABASE_PATH)
+    user = db.users.get_by_uuid(user_uuid)
     _ensure_user_record(user)
 
     access_token = create_access_token(user_uuid)
@@ -287,5 +288,5 @@ def get_current_user_uuid(
 
 def get_current_user(user_uuid: str = Depends(get_current_user_uuid)) -> UserRecord:
     """根据用户 UUID 获取当前用户信息，供其他接口使用,源文件中暂未被调用"""
-    user = get_user_by_uuid(user_uuid, db_path=DATABASE_PATH)
+    user = db.users.get_by_uuid(user_uuid)
     return _ensure_user_record(user)

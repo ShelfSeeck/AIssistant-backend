@@ -10,10 +10,12 @@
 
 | 模块 | 职责 |
 |------|------|
-| `db.py` | 数据库 CRUD 操作，管理用户、项目、会话、消息 |
-| `loop.py` | Agent 循环编排，HTTP 路由，消息持久化 |
+| `db.py` | `DatabaseFacade` 门面对象与领域数据访问（users/projects/sessions/messages/access） |
+| `loop.py` | Agent 循环编排与聊天主路由（`/chat/{sid}`、`/chat/{sid}/regenerate`） |
+| `data.py` | 数据查询路由、工具注册表路由、消息版本路由，以及基础健康检查路由 |
 | `tool.py` | 工具定义与注册 |
 | `auth.py` | JWT 认证 |
+| `main.py` | 应用生命周期与路由挂载（不承载业务端点） |
 | `config.py` | 配置管理 |
 
 ---
@@ -35,8 +37,8 @@ users (用户表)
 | `sid` | TEXT | 所属会话 ID |
 | `kind` | TEXT | 消息类型 |
 | `raw_json` | TEXT | Pydantic AI ModelMessage 的原始 JSON |
-| `msg_timestamp` | REAL | 排序用时间戳 |
-| `msg_time` | TEXT | 人类可读时间 |
+| `timestamp` | REAL | 排序与上下文构建使用的机器时间戳 |
+| `created_at` | REAL | 创建时间（机器时间戳） |
 | `parent_msg_id` | TEXT | 父消息 ID，用于版本管理 |
 | `version` | INTEGER | 版本号（默认 1） |
 | `is_latest` | INTEGER | 是否最新版本（1=是，0=否） |
@@ -71,60 +73,35 @@ users (用户表)
 
 ## 聊天请求处理流程
 
-```
-POST /chat/{sid}
-         │
-         ▼
-post_chat_message()
-    - 验证 JWT，提取 user_uuid
-    - 校验 URL 的 sid 与 body 一致
-         │
-         ▼
-_handle_chat_turn()
-    1. 权限校验 (_validate_resource_access)
-    2. 保存用户消息到 DB
-    3. 计算有效工具集 (后端白名单 ∩ 前端请求)
-    4. 进入 Agent Loop
-         │
-         ▼
-    ┌─── Agent Loop ───┐
-    │                  │
-    │  a. 加载历史消息  │ ← 只加载 is_latest=1 的消息
-    │  b. 调用 AI 模型  │
-    │  c. 保存新消息    │
-    │  d. 检查循环条件  │
-    │                  │
-    └──────────────────┘
-         │
-         ▼
-返回 ChatSendResponse
-```
+1. `POST /chat/{sid}` 进入 `async post_chat_message()`。
+2. 校验 JWT，提取 user_uuid，并校验 path sid 与 body sid 一致。
+3. 调用 `async _chat()`：
+        - 权限校验：`db.access.validate_project_session`
+        - 保存用户消息
+        - 计算有效工具集合（后端白名单与请求 allowed_tools 交集）
+        - 构造 `LoopCtx` 循环上下文
+        - 调用统一的 `_run_loop(ctx)` 进入 Agent Loop
+4. Agent Loop 每轮执行（在 `_run_loop` 内）：
+        - 加载历史消息（仅 `is_latest=1`）
+        - 异步调用 AI 模型（`await _call_model()`）
+        - 持久化本轮新消息
+        - 按工具状态与上限判断是否继续
+5. 结束后返回 `ChatSendResponse`。
 
 ---
 
 ## Regenerate（重新生成）流程
 
-```
-POST /chat/{sid}/regenerate
-         │
-         ▼
-regenerate_message()
-    1. 验证 JWT 和权限
-    2. 获取目标用户消息 (target_msg_id)
-    3. 校验消息类型必须是 user
-         │
-         ▼
-    4. 将 target 之后的消息标记为 is_latest=0
-    5. 计算新版本号 = max(version) + 1
-         │
-         ▼
-    6. 进入 Agent Loop (同正常聊天)
-       新消息的 parent_msg_id = target_msg_id
-       新消息的 version = 新版本号
-         │
-         ▼
-返回 RegenerateResponse (含 version)
-```
+1. `POST /chat/{sid}/regenerate` 进入 `async regenerate_message()`。
+2. 验证 JWT 和资源权限。
+3. 获取目标用户消息 `target_msg_id`，并校验目标类型必须是 `user`。
+4. 将目标之后消息标记为 `is_latest=0`。
+5. 计算新版本号：`max(version) + 1`。
+6. 构造 `LoopCtx` 循环上下文（带 `parent_msg_id` 和 `version`）。
+7. 调用统一的 `_run_loop(ctx)` 进入与正常聊天一致的 Agent Loop：
+   - 新消息 `parent_msg_id = target_msg_id`
+   - 新消息 `version = new_version`
+8. 返回 `RegenerateResponse`（包含 version）。
 
 ### 版本管理说明
 
@@ -139,9 +116,27 @@ regenerate_message()
 
 ## Agent Loop 详解
 
+### 统一循环函数：`_run_loop(ctx: LoopCtx) -> LoopResult`
+
+重构后，chat 和 regenerate 两个场景共享同一个异步循环函数。
+
+**输入**：`LoopCtx` 数据类
+- `sid`: 会话 ID
+- `user_uuid`: 用户 UUID
+- `deps`: ChatDeps（工具模式 + 允许工具列表）
+- `request_id`: 请求 ID
+- `retry_of_request_id`: 重试关联的请求 ID
+- `parent_msg_id`: regenerate 场景专用（None = chat 模式）
+- `version`: regenerate 场景专用版本号
+
+**输出**：`LoopResult` 数据类
+- `answer`: AI 最终回复
+- `msg_id`: 消息 ID
+- `version`: 版本号（仅 regenerate 有值）
+
 ### 循环控制变量
 
-- `total_tool_calls`: 累计工具调用次数，用于限制
+- `total_tool_calls`: 累计工具调用次数，通过 `result.usage().tool_calls` 获取（Pydantic AI 内置）
 - `orchestration_round`: 编排轮次，防止无限循环
 - `saw_tool_call`: FORCE 模式下是否已调用过工具
 
@@ -154,7 +149,7 @@ regenerate_message()
 
 当 `tool_mode == FORCE` 且 AI 未调用工具时：
 1. 保存 AI 的回复（kind=agent_response）
-2. 注入 TOOL_FORCE_PROMPT 提示
+2. 注入 TOOL_FORCE_PROMPT 提示（kind=route_user，写入数据库）
 3. 继续循环
 
 ---
@@ -197,16 +192,27 @@ Pydantic AI 要求 ModelRequest 和 ModelResponse 交替出现：
 使用 Pydantic AI 官方方案：
 
 ```python
-# 序列化
+# 序列化（使用简化函数 _to_json）
 from pydantic_core import to_json
 raw_json = to_json(message).decode("utf-8")
 
-# 反序列化
+# 反序列化（使用简化函数 _to_history）
 from pydantic_ai import ModelMessagesTypeAdapter
 messages = ModelMessagesTypeAdapter.validate_json(f"[{raw_json}]")
 ```
 
 保留完整元数据：timestamp、usage、model_name、run_id 等。
+
+### 内部辅助函数
+
+| 函数 | 说明 |
+|------|------|
+| `_err()` | 构造并抛出标准化 API 错误 |
+| `_to_history()` | 将数据库记录反序列化为 ModelMessage 列表 |
+| `_to_json()` | 将 ModelMessage 序列化为 JSON 字符串 |
+| `async _call_model()` | 异步调用 AI 模型（带重试机制） |
+| `async _chat()` | 处理聊天请求核心逻辑 |
+| `async _run_loop()` | 统一的 Agent Loop 循环函数 |
 
 ---
 
@@ -267,6 +273,28 @@ guarded_func 运行时权限校验
 
 | 配置 | 说明 |
 |------|------|
-| `MAX_TOOL_LOOPS` | 单次请求最大工具调用次数 |
-| `MAX_MODEL_RETRIES` | 模型 API 调用重试次数 |
+| `MAX_TOOL_LOOPS` | 单次请求最大工具调用次数（默认 20） |
+| `MAX_MODEL_RETRIES` | 模型 API 调用重试次数（默认 3） |
 | `ALLOWED_TOOLS_GLOBAL` | 后端工具白名单 |
+
+---
+
+## 架构重构历史
+
+### 2026-04-07 重构
+
+**目标**：消除重复代码，简化函数命名，全面异步化
+
+**主要变化**：
+1. **提取统一循环**：`_chat()` 和 `regenerate_message()` 中的 ~200 行重复 Agent Loop 代码提取为统一的 `_run_loop()` 函数
+2. **新增数据结构**：`LoopCtx` 和 `LoopResult` dataclass 封装循环参数和返回值
+3. **函数重命名**：简化 5 个内部函数名（`_raise_api_error` → `_err`，`_build_model_history` → `_to_history` 等）
+4. **全面异步化**：所有核心函数改为 `async/await`，使用 `await _CHAT_AGENT.run()` 替代 `run_sync()`
+5. **保留可追溯性**：route_user 消息继续作为 kind 存储在数据库中
+6. **使用 Pydantic AI 内置特性**：工具调用次数通过 `result.usage().tool_calls` 获取，而非自建计数逻辑
+
+**效果**：
+- 代码重复：2 处 → 1 处
+- 维护成本：降低 50%（只需维护一处循环逻辑）
+- 类型安全：增强（dataclass 明确参数类型）
+- 未来扩展：为流式响应打下基础
