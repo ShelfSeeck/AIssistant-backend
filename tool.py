@@ -44,8 +44,7 @@ from config import BASE_DIR
 # - set[str]: 只允许指定的工具（必须是已注册的）
 # 这是安全边界，前端请求只能在此范围内进一步限制，不能扩展
 ALLOWED_TOOLS_GLOBAL: set[str] | None = {
-    "read_workspace_file",
-    "list_workspace_dir",
+    "file_operation",
 }
 
 # ============================================================
@@ -92,6 +91,7 @@ def get_tool_registry() -> dict[str, Any]:
     键为工具名，值为函数对象，供 build_tools 进行统一包装。
     """
     return dict(_TOOL_REGISTRY)
+
 
 
 def _create_guarded_tool(func: Any, tool_name: str) -> Any:
@@ -194,54 +194,28 @@ def _resolve_workspace_path(raw_path: str) -> Path:
 # 1. 工具函数的第一个参数必须是 RunContext（Pydantic AI 要求）
 # 2. 这里使用 RunContext[Any] 避免循环导入，实际类型是 RunContext[ChatDeps]
 # 3. 运行时权限与安全校验由本模块的 _create_guarded_tool 保证
+# 4. 工具必须带有说明，只要在修饰器修饰的那个函数做好""""""的注释即可，可以把参数和目的写好点
 # ============================================================
 
-
 @register_tool
-def read_workspace_file(ctx: RunContext[Any], path: str) -> dict[str, Any]:
-    """读取工作区内的文件内容。"""
-    try:
-        target = _resolve_workspace_path(path)
-    except ValueError as exc:
-        return {"error": "invalid_path", "message": str(exc)}
-
-    if not target.exists():
-        return {"error": "file_not_found", "path": path}
-    if target.is_dir():
-        return {"error": "path_is_directory", "path": path}
-
-    try:
-        content = target.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        return {"error": "binary_file_not_supported", "path": path}
-
-    relative = target.relative_to(BASE_DIR)
-    return {
-        "path": str(relative).replace("\\", "/"),
-        "content": content,
-    }
-
-
-@register_tool
-def list_workspace_dir(ctx: RunContext[Any], path: str = ".") -> dict[str, Any]:
-    """列出工作区内的目录内容。"""
-    try:
-        target = _resolve_workspace_path(path)
-    except ValueError as exc:
-        return {"error": "invalid_path", "message": str(exc)}
-
-    if not target.exists():
-        return {"error": "directory_not_found", "path": path}
-    if not target.is_dir():
-        return {"error": "path_is_not_directory", "path": path}
-
-    items: list[str] = []
-    for child in sorted(target.iterdir(), key=lambda item: item.name.lower()):
-        suffix = "/" if child.is_dir() else ""
-        items.append(f"{child.name}{suffix}")
-
-    relative = target.relative_to(BASE_DIR)
-    return {
-        "path": str(relative).replace("\\", "/"),
-        "items": items,
-    }
+def file_operation(
+    ctx: RunContext[Any],
+    scope: str,
+    method: str,
+    args: dict
+) -> dict[str, Any]:
+    """
+    执行文件系统操作（项目文件或个人用户文件）。
+    
+    参数:
+    - scope: 操作范围。可选值为 "project" (操作当前项目文件夹内容) 或 "user" (操作用户个人空间内容)
+    - method: 操作方法名 (create_file, delete_file, create_dir, delete_dir, read_file, search_dir)
+    - args: 传给该方法的字典参数。例如 {"path": "test.txt", "content": "hello"}
+    """
+    from file import filesystem_tool_handler
+    
+    deps = ctx.deps
+    pid = getattr(deps, "pid", None) if scope == "project" else None
+    user_uuid = getattr(deps, "user_uuid", None)
+    
+    return filesystem_tool_handler(ctx, method, args, pid=pid, user_uuid=user_uuid)

@@ -41,7 +41,7 @@ from tool import (
     effective_tools,
     get_registered_tool_names,
 )
-
+from state import ToolCheck
 
 db = DatabaseFacade(db_path=DATABASE_PATH)
 
@@ -65,6 +65,12 @@ TOOL_FORCE_PROMPT = (
 TOOL_CONTINUE_PROMPT = (
     "If you still need tools, keep tool_in_progress as 1 and continue. "
     "If everything is complete, set tool_in_progress to 0 and return the final answer."
+)
+
+TOOL_EXHAUSTED_PROMPT = (
+    "Tool usage limit reached. You cannot call any more tools. "
+    "Please provide the best possible final answer based on the information you already have. "
+    "Set tool_in_progress to 0."
 )
 
 
@@ -198,15 +204,16 @@ class ChatDeps:
     """
     Agent 运行时依赖（通过 RunContext.deps 注入到工具函数）
     
-    数据来源：_chat() 构造
-    数据去向：传入 agent.run(deps=...)，工具函数通过 ctx.deps 访问
-    
     字段说明：
     - tool_mode: 当前请求的工具模式
     - allowed_tools: 当前请求的有效工具集合
+    - pid: 当前操作的项目ID（从请求上下文获取，不可由AI修改）
+    - user_uuid: 当前操作的用户ID（从认证态获取，不可由AI修改）
     """
     tool_mode: ToolMode
     allowed_tools: set[str]
+    pid: str
+    user_uuid: str
 
 
 # ============================================================
@@ -394,9 +401,11 @@ async def _run_loop(ctx: LoopCtx) -> LoopResult:
     - None: chat 模式
     - 非None: regenerate 模式（需要 parent_msg_id 和 version）
     """
-    total_tool_calls = 0
-    orchestration_round = 0
-    saw_tool_call = False
+    tracker = ToolCheck(
+        max_tool_loops=MAX_TOOL_LOOPS,
+        request_id=ctx.request_id,
+        retry_of_request_id=ctx.retry_of_request_id
+    )
     
     while True:
         # 1. 从数据库加载历史消息（只加载 is_latest=1 的消息）
@@ -405,24 +414,32 @@ async def _run_loop(ctx: LoopCtx) -> LoopResult:
             user_uuid=ctx.user_uuid,
         )
         model_history = _to_history(history_rows)
+
+        # 2. 调用 AI 模型（如果配额已用完，则注入强制结束提示）
+        quota_exceeded = tracker.is_quota_exceeded()
         
-        # 2. 检查工具调用配额
-        remaining_tool_calls = MAX_TOOL_LOOPS - total_tool_calls
-        if remaining_tool_calls < 0:
-            _err(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                code="TOOL_LOOP_LIMIT_EXCEEDED",
-                message="Tool loop limit exceeded",
-                request_id=ctx.request_id,
-                retry_of_request_id=ctx.retry_of_request_id,
-                retryable=True,
+        if quota_exceeded:
+            # 注入“额度已满”提示，强制 LLM 收尾
+            exhausted_msg = ModelRequest(parts=[UserPromptPart(content=TOOL_EXHAUSTED_PROMPT)])
+            db.messages.create_for_user(
+                sid=ctx.sid,
+                user_uuid=ctx.user_uuid,
+                kind="route_user",
+                raw_json=_to_json(exhausted_msg),
+                parent_msg_id=ctx.parent_msg_id,
+                version=ctx.version,
             )
-        
-        # 3. 调用 AI 模型
+            # 更新历史记录以包含强制提示
+            history_rows = db.messages.list_latest_by_session_for_user(
+                sid=ctx.sid,
+                user_uuid=ctx.user_uuid,
+            )
+            model_history = _to_history(history_rows)
+
         result = await _call_model(
             message_history=model_history,
             deps=ctx.deps,
-            remaining_tool_calls=remaining_tool_calls,
+            remaining_tool_calls=0 if quota_exceeded else tracker.remaining_calls,
             request_id=ctx.request_id,
             retry_of_request_id=ctx.retry_of_request_id,
         )
@@ -454,22 +471,10 @@ async def _run_loop(ctx: LoopCtx) -> LoopResult:
                 is_final_turn=is_final,
             )
         
-        total_tool_calls += calls_in_run
-        saw_tool_call = saw_tool_call or calls_in_run > 0
+        tracker.update_usage(calls_in_run, is_final)
         
         # 6. FORCE 模式：必须至少调用一次工具
-        if ctx.deps.tool_mode == ToolMode.FORCE and not saw_tool_call:
-            orchestration_round += 1
-            if orchestration_round > MAX_TOOL_LOOPS:
-                _err(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    code="TOOL_LOOP_LIMIT_EXCEEDED",
-                    message="Tool loop limit exceeded",
-                    request_id=ctx.request_id,
-                    retry_of_request_id=ctx.retry_of_request_id,
-                    retryable=True,
-                )
-            
+        if tracker.should_force_continue(ctx.deps.tool_mode.value):
             # 注入强制工具调用提示（保留数据库记录）
             route_message = ModelRequest(parts=[UserPromptPart(content=TOOL_FORCE_PROMPT)])
             if ctx.parent_msg_id is not None:
@@ -502,17 +507,6 @@ async def _run_loop(ctx: LoopCtx) -> LoopResult:
             )
         
         # 8. AI 表示还需继续 → 注入继续提示，进入下一轮
-        orchestration_round += 1
-        if orchestration_round > MAX_TOOL_LOOPS:
-            _err(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                code="TOOL_LOOP_LIMIT_EXCEEDED",
-                message="Tool loop limit exceeded",
-                request_id=ctx.request_id,
-                retry_of_request_id=ctx.retry_of_request_id,
-                retryable=True,
-            )
-        
         # 注入继续提示（保留数据库记录）
         route_continue_message = ModelRequest(parts=[UserPromptPart(content=TOOL_CONTINUE_PROMPT)])
         if ctx.parent_msg_id is not None:
@@ -583,6 +577,8 @@ async def _chat(
     deps = ChatDeps(
         tool_mode=Usersend.tool_mode,
         allowed_tools=effective_allowed_tools,
+        pid=Usersend.pid,
+        user_uuid=user_uuid,
     )
 
     # 5. 构造循环上下文并调用统一循环
@@ -768,6 +764,8 @@ async def regenerate_message(
     deps = ChatDeps(
         tool_mode=Usersend.tool_mode,
         allowed_tools=effective_allowed_tools,
+        pid=Usersend.pid,
+        user_uuid=user_uuid,
     )
 
     # 构造循环上下文并调用统一循环
