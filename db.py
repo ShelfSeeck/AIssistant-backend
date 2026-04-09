@@ -603,8 +603,44 @@ class AccessFacade(_DataBase):
         return session.get("pid") == pid
 
 
+class NoncesFacade(_DataBase):
+    """
+    Nonce 管理（防重放攻击）。
+    """
+
+    def is_nonce_used(self, nonce: str) -> bool:
+        """检查 nonce 是否已被使用"""
+        with self._cursor() as cursor:
+            cursor.execute("SELECT 1 FROM nonces WHERE nonce = ?", (nonce,))
+            row = cursor.fetchone()
+        return row is not None
+
+    def use_nonce(self, nonce: str, user_uuid: str, timestamp: float) -> bool:
+        """记录并使用 nonce"""
+        created_at = self._now_timestamp()
+        try:
+            with self._cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO nonces (nonce, user_uuid, timestamp, created_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (nonce, user_uuid, timestamp, created_at),
+                )
+            return True
+        except sqlite3.IntegrityError:
+            return False
+
+    def clean_old_nonces(self, before_timestamp: float) -> int:
+        """从数据库中删除过期的 nonce"""
+        with self._cursor() as cursor:
+            cursor.execute("DELETE FROM nonces WHERE timestamp < ?", (before_timestamp,))
+            affected = cursor.rowcount
+        return affected
+
+
 class DatabaseFacade:
-    """数据库门面对象：统一提供 users/projects/sessions/messages/access 能力。"""
+    """数据库门面对象：统一提供 users/projects/sessions/messages/access/nonces 能力。"""
 
     def __init__(self, db_path: str = "project.db"):
         self.db_path = db_path
@@ -613,6 +649,7 @@ class DatabaseFacade:
         self.sessions = SessionsFacade(self)
         self.messages = MessagesFacade(self)
         self.access = AccessFacade(self)
+        self.nonces = NoncesFacade(self)
 
     @staticmethod
     def _configure_connection(conn: sqlite3.Connection) -> None:
@@ -688,6 +725,14 @@ class DatabaseFacade:
                 FOREIGN KEY (sid) REFERENCES sessions(sid) ON DELETE CASCADE,
                 FOREIGN KEY (parent_msg_id) REFERENCES messages(msg_id) ON DELETE SET NULL
             );
+            CREATE TABLE IF NOT EXISTS nonces (
+                nonce TEXT PRIMARY KEY,
+                user_uuid TEXT NOT NULL,
+                timestamp REAL NOT NULL,
+                created_at REAL NOT NULL,
+                FOREIGN KEY (user_uuid) REFERENCES users(uuid) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_nonces_timestamp ON nonces(timestamp);
             """
             cursor.executescript(schema)
 
