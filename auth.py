@@ -3,12 +3,14 @@ import hashlib
 import hmac
 import os
 import secrets
+import time
+import random
 # 认证相关逻辑，包括注册、登录、刷新 token，以及获取当前用户等功能。
 from datetime import datetime, timedelta, timezone
 from typing import Literal, TypedDict, cast
 # 这里使用 PyJWT 来处理 JWT 生成和验证，使用 PBKDF2-HMAC 来做密码哈希，避免引入额外的依赖库。
 import jwt
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, Header, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
@@ -29,6 +31,10 @@ db = DatabaseFacade(db_path=DATABASE_PATH)
 REFRESH_COOKIE_NAME = os.getenv("REFRESH_COOKIE_NAME", "refresh_token")
 REFRESH_COOKIE_PATH = os.getenv("REFRESH_COOKIE_PATH", "/auth")
 REFRESH_COOKIE_SECURE = os.getenv("REFRESH_COOKIE_SECURE", "false").lower() == "true"#是否仅通过 HTTPS 传输刷新令牌 Cookie，生产环境建议设置为 true。
+
+# 防重放配置：Nonce 有效期（秒）
+NONCE_EXPIRY_SECONDS = 300
+
 
 # 令牌类型：访问令牌和刷新令牌。
 TokenType = Literal["access", "refresh"]
@@ -191,6 +197,61 @@ def _ensure_user_record(user: dict | None) -> UserRecord:
     return cast(UserRecord, user)
 
 
+def get_current_user_uuid(
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+) -> str:
+    """从 Authorization 头中提取访问令牌，解码并验证后返回用户 UUID"""
+    if credentials is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing access token")
+
+    token_payload = decode_token(credentials.credentials, expected_type="access")
+    return token_payload["sub"]
+
+
+def verify_nonce(
+    x_nonce: str | None = Header(None, alias="X-Nonce"),
+    x_nonce_ts: float | None = Header(None, alias="X-Nonce-Timestamp"),
+    user_uuid: str = Depends(get_current_user_uuid),
+) -> None:
+    """
+    FastAPI 依赖项：验证 Nonce 以防重放攻击。
+    """
+    if not x_nonce or not x_nonce_ts:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "NONCE_MISSING",
+                "message": "X-Nonce and X-Nonce-Timestamp headers are required",
+            },
+        )
+
+    now = time.time()
+    if abs(now - x_nonce_ts) > NONCE_EXPIRY_SECONDS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "NONCE_EXPIRED",
+                "message": "Nonce has expired or clock skew is too large",
+            },
+        )
+
+    # 尝试在数据库中记录（利用唯一约束）
+    success = db.nonces.use_nonce(x_nonce, user_uuid, x_nonce_ts)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "NONCE_REPLAY",
+                "message": "Nonce already used (replay attack detected)",
+            },
+        )
+
+    # 随机触发过期 Nonce 的清理（约 5% 的请求会触发）
+    if random.random() < 0.05:
+        expiry_threshold = now - NONCE_EXPIRY_SECONDS * 2
+        db.nonces.clean_old_nonces(expiry_threshold)
+
+
 def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
     """把 refresh token 写入 HttpOnly Cookie。"""
     response.set_cookie(
@@ -275,18 +336,7 @@ def logout(response: Response) -> Response:
     return response#返回空响应保证可读性
 
 
-def get_current_user_uuid(
-    credentials: HTTPAuthorizationCredentials | None = Depends(security),
-) -> str:
-    """从 Authorization 头中提取访问令牌，解码并验证后返回用户 UUID,源文件中暂未被调用"""
-    if credentials is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing access token")
-
-    token_payload = decode_token(credentials.credentials, expected_type="access")
-    return token_payload["sub"]
-
-
 def get_current_user(user_uuid: str = Depends(get_current_user_uuid)) -> UserRecord:
-    """根据用户 UUID 获取当前用户信息，供其他接口使用,源文件中暂未被调用"""
+    """根据用户 UUID 获取当前用户信息，供其他接口使用"""
     user = db.users.get_by_uuid(user_uuid)
     return _ensure_user_record(user)
