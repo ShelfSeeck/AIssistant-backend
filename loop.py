@@ -56,23 +56,7 @@ MAX_MODEL_RETRIES = 3
 # 单次请求中工具调用的最大次数（防止无限循环）
 MAX_TOOL_LOOPS = 20
 
-# FORCE 模式下，AI 未调用工具时注入的提示
-TOOL_FORCE_PROMPT = (
-    "Tool mode is force. Call one allowed tool at least once before returning final output. "
-    "When the tool process is complete, set tool_in_progress to 0."
-)
-
-# 工具循环继续时注入的提示
-TOOL_CONTINUE_PROMPT = (
-    "If you still need tools, keep tool_in_progress as 1 and continue. "
-    "If everything is complete, set tool_in_progress to 0 and return the final answer."
-)
-
-TOOL_EXHAUSTED_PROMPT = (
-    "Tool usage limit reached. You cannot call any more tools. "
-    "Please provide the best possible final answer based on the information you already have. "
-    "Set tool_in_progress to 0."
-)
+from loop_nodes import TOOL_EXHAUSTED_PROMPT, TOOL_FORCE_PROMPT, TOOL_CONTINUE_PROMPT
 
 # 防重放配置：Nonce 有效期（秒）
 NONCE_EXPIRY_SECONDS = 300
