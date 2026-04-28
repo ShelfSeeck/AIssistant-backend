@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import uuid
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, NoReturn, cast
 
@@ -70,17 +70,25 @@ NONCE_EXPIRY_SECONDS = 300
 class LoopCtx:
     """
     Agent Loop 循环上下文
-    
-    封装循环所需的所有状态，用于 _run_loop 函数。
-    通过 parent_msg_id 的有无区分 chat/regenerate 场景。
+
+    封装循环所需的所有状态，通过 parent_msg_id 的有无区分 chat/regenerate 场景。
+    节点间通过额外字段传递中间数据，字段在节点执行过程中逐步填充。
     """
     sid: str
     user_uuid: str
     deps: "ChatDeps"
     request_id: str
     retry_of_request_id: str | None
-    parent_msg_id: str | None = None  # regenerate 专用
-    version: int | None = None         # regenerate 专用
+    parent_msg_id: str | None = None
+    version: int | None = None
+
+    # 节点间数据传递（由各节点逐步填充）
+    model_history: list["ModelMessage"] = field(default_factory=list)
+    result: Any = None              # AgentRunResult
+    output: "AgentOutput" | None = None
+    final_msg_id: str | None = None
+    loop_result: "LoopResult" | None = None
+    tracker: "ToolCheck" | None = None
 
 
 @dataclass
