@@ -43,6 +43,7 @@ from tool import (
     get_registered_tool_names,
 )
 from state import ToolCheck
+from loop_nodes import TOOL_EXHAUSTED_PROMPT, TOOL_FORCE_PROMPT, TOOL_CONTINUE_PROMPT
 
 db = DatabaseFacade(db_path=DATABASE_PATH)
 
@@ -55,8 +56,6 @@ MAX_MODEL_RETRIES = 3
 
 # 单次请求中工具调用的最大次数（防止无限循环）
 MAX_TOOL_LOOPS = 20
-
-from loop_nodes import TOOL_EXHAUSTED_PROMPT, TOOL_FORCE_PROMPT, TOOL_CONTINUE_PROMPT
 
 # 防重放配置：Nonce 有效期（秒）
 NONCE_EXPIRY_SECONDS = 300
