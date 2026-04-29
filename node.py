@@ -166,6 +166,9 @@ async def call_model_node(ctx: LoopContext) -> NodeOutput:
 
     agent = create_chat_agent().with_tools(build_tools())
     ctx.response_text = ""
+    # 新一轮调用开始，清除上一轮的临时错误状态
+    ctx.error = None
+    ctx.error_code = None
 
     if ctx.action == ActionKind.SEND:
         user_prompt: str | None = ctx.user_input
@@ -228,6 +231,7 @@ async def call_model_node(ctx: LoopContext) -> NodeOutput:
     except Exception as exc:
         ctx.error = str(exc)
         ctx.error_code = "MODEL_CALL_FAILED"
+        ctx.retries += 1
 
     return NodeOutput()
 
