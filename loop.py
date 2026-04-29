@@ -84,7 +84,7 @@ class LoopCtx:
 
     # 节点间数据传递（由各节点逐步填充）
     model_history: list["ModelMessage"] = field(default_factory=list)
-    result: Any = None              # AgentRunResult
+    result: AgentRunResult | None = None
     output: "AgentOutput" | None = None
     final_msg_id: str | None = None
     loop_result: "LoopResult" | None = None
