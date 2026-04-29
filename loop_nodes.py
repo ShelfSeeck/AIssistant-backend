@@ -12,11 +12,13 @@ loop_nodes.py — Agent Loop 状态图节点模块
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Awaitable, Callable, NoReturn, cast
 
 from fastapi import HTTPException, status
-from pydantic import BaseModel
-from pydantic_ai.messages import ModelRequest, UserPromptPart
+from pydantic import BaseModel, Field, field_validator
+from pydantic_ai.agent import AgentRunResult
+from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart
 
 # 节点函数签名：接收 ctx，返回路由 key（str）
 NodeFunc = Callable[["LoopCtx"], Awaitable[str]]
@@ -27,6 +29,36 @@ class Node:
     """状态图中的一个节点"""
     run: NodeFunc          # async (ctx) -> str  返回路由 key
     edges: dict[str, str]  # 路由 key → 下一节点名
+
+
+# ============================================================
+# 数据模型
+# ============================================================
+
+
+class ToolMode(str, Enum):
+    """工具使用模式"""
+    OFF = "off"
+    AUTO = "auto"
+    FORCE = "force"
+
+
+@dataclass
+class ChatDeps:
+    """Agent 运行时依赖（通过 RunContext.deps 注入到工具函数）"""
+    tool_mode: ToolMode
+    allowed_tools: set[str]
+    pid: str
+    user_uuid: str
+
+
+class AgentOutput(BaseModel):
+    """AI Agent 的结构化输出"""
+    answer: str = ""
+    tool_in_progress: int = Field(default=0, ge=0, le=1)
+    tool_name: str | None = None
+    tool_payload: dict[str, Any] | None = None
+    meta: dict[str, Any] | None = None
 
 
 # ============================================================
@@ -207,7 +239,7 @@ async def _inject_exhausted(ctx: LoopCtx) -> str:
 
 async def _call_agent(ctx: LoopCtx) -> str:
     """调用 AI 模型（重试逻辑在 _call_model 内部）"""
-    from loop import _call_model, AgentOutput
+    from loop import _call_model
 
     assert ctx.tracker is not None
     remaining = 0 if ctx.tracker.is_quota_exceeded() else ctx.tracker.remaining_calls
@@ -226,8 +258,9 @@ async def _persist_messages(ctx: LoopCtx) -> str:
     """持久化 Agent 产生的所有新消息"""
     from loop import db
 
+    assert ctx.output is not None
     new_messages = ctx.result.new_messages() if ctx.result else []
-    is_final = ctx.output.tool_in_progress == 0 if ctx.output else False
+    is_final = ctx.output.tool_in_progress == 0
     ctx.final_msg_id = db.messages.save_agent_messages(
         sid=ctx.sid,
         user_uuid=ctx.user_uuid,
@@ -242,9 +275,10 @@ async def _persist_messages(ctx: LoopCtx) -> str:
 async def _update_tracker(ctx: LoopCtx) -> str:
     """更新工具用量统计并决定下一步路由"""
     assert ctx.tracker is not None
+    assert ctx.output is not None
     usage = ctx.result.usage() if ctx.result else None
     calls_in_run = usage.tool_calls if usage else 0
-    is_final = ctx.output.tool_in_progress == 0 if ctx.output else False
+    is_final = ctx.output.tool_in_progress == 0
     ctx.tracker.update_usage(calls_in_run, is_final)
 
     if ctx.tracker.should_force_continue(ctx.deps.tool_mode.value):
@@ -290,9 +324,10 @@ async def _finish(ctx: LoopCtx) -> str:
     """完成：更新时间戳并设置最终结果"""
     from loop import db
 
+    assert ctx.output is not None
     db.sessions.touch_timestamp(ctx.sid)
     ctx.loop_result = LoopResult(
-        answer=ctx.output.answer if ctx.output else "",
+        answer=ctx.output.answer,
         msg_id=ctx.final_msg_id or "",
         version=ctx.version,
     )

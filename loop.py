@@ -14,8 +14,7 @@ from __future__ import annotations
 
 import uuid
 import time
-from dataclasses import dataclass, field
-from enum import Enum
+from dataclasses import dataclass
 from typing import Any, NoReturn, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Header, status
@@ -43,7 +42,9 @@ from tool import (
     get_registered_tool_names,
 )
 from loop_nodes import (
+    AgentOutput,
     ApiError,
+    ChatDeps,
     LoopCtx,
     LoopResult,
     Node,
@@ -51,6 +52,7 @@ from loop_nodes import (
     TOOL_EXHAUSTED_PROMPT,
     TOOL_FORCE_PROMPT,
     ToolCheck,
+    ToolMode,
     _call_agent,
     _check_quota,
     _finish,
@@ -81,19 +83,6 @@ NONCE_EXPIRY_SECONDS = 300
 # ============================================================
 # 数据模型定义
 # ============================================================
-
-
-class ToolMode(str, Enum):
-    """
-    工具使用模式枚举
-    
-    - OFF:   完全禁止工具调用，AI 只能纯文本回复
-    - AUTO:  自动模式，AI 根据需要决定是否调用工具
-    - FORCE: 强制模式，AI 必须至少调用一次工具才能返回
-    """
-    OFF = "off"
-    AUTO = "auto"
-    FORCE = "force"
 
 
 class ChatSendRequest(BaseModel):
@@ -139,44 +128,6 @@ class ChatSendResponse(BaseModel):
     retry_of_request_id: str | None = None
     assistant_message: str
     assistant_message_id: str
-
-
-class AgentOutput(BaseModel):
-    """
-    AI Agent 的结构化输出格式
-    
-    数据来源：AI 模型生成（通过 Pydantic AI 的 output_type 约束）
-    数据去向：_chat() 解析并决定是否继续循环
-    
-    字段说明：
-    - answer: AI 的文本回复
-    - tool_in_progress: 0=完成，1=还需要继续调用工具
-    - tool_name: （可选）当前调用的工具名
-    - tool_payload: （可选）工具调用参数
-    - meta: （可选）元信息
-    """
-    answer: str = ""
-    tool_in_progress: int = Field(default=0, ge=0, le=1)
-    tool_name: str | None = None
-    tool_payload: dict[str, Any] | None = None
-    meta: dict[str, Any] | None = None
-
-
-@dataclass
-class ChatDeps:
-    """
-    Agent 运行时依赖（通过 RunContext.deps 注入到工具函数）
-    
-    字段说明：
-    - tool_mode: 当前请求的工具模式
-    - allowed_tools: 当前请求的有效工具集合
-    - pid: 当前操作的项目ID（从请求上下文获取，不可由AI修改）
-    - user_uuid: 当前操作的用户ID（从认证态获取，不可由AI修改）
-    """
-    tool_mode: ToolMode
-    allowed_tools: set[str]
-    pid: str
-    user_uuid: str
 
 
 # ============================================================
