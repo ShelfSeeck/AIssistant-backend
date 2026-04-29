@@ -2,7 +2,7 @@
 loop_nodes.py — Agent Loop 状态图节点模块
 
 本模块职责：
-1. 定义 Node 类（单节点：执行函数 + 出边映射）
+1. 定义 LoopCtx / LoopResult / Node 等核心数据结构
 2. 提供 Agent Loop 所需的所有状态节点函数与工具用量校验
 3. 统一节点函数签名为 async (ctx: LoopCtx) -> str
 
@@ -11,18 +11,15 @@ loop_nodes.py — Agent Loop 状态图节点模块
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, NoReturn, TYPE_CHECKING, cast
+from dataclasses import dataclass, field
+from typing import Any, Awaitable, Callable, NoReturn, cast
 
 from fastapi import HTTPException, status
 from pydantic import BaseModel
 from pydantic_ai.messages import ModelRequest, UserPromptPart
 
-if TYPE_CHECKING:
-    from loop import LoopCtx
-
 # 节点函数签名：接收 ctx，返回路由 key（str）
-NodeFunc = Callable[[Any], Awaitable[str]]
+NodeFunc = Callable[["LoopCtx"], Awaitable[str]]
 
 
 @dataclass
@@ -133,6 +130,38 @@ class ToolCheck:
     @property
     def remaining_calls(self) -> int:
         return max(self.max_tool_loops - self.total_tool_calls, 0)
+
+
+# ============================================================
+# 循环上下文与返回值
+# ============================================================
+
+
+@dataclass
+class LoopCtx:
+    """Agent Loop 循环上下文，节点间通过字段传递中间数据"""
+    sid: str
+    user_uuid: str
+    deps: "ChatDeps"
+    request_id: str
+    retry_of_request_id: str | None
+    parent_msg_id: str | None = None
+    version: int | None = None
+
+    model_history: list["ModelMessage"] = field(default_factory=list)
+    result: "AgentRunResult | None" = None
+    output: "AgentOutput | None" = None
+    final_msg_id: str | None = None
+    loop_result: "LoopResult | None" = None
+    tracker: "ToolCheck | None" = None
+
+
+@dataclass
+class LoopResult:
+    """Agent Loop 循环返回值"""
+    answer: str
+    msg_id: str
+    version: int | None = None
 
 
 # ============================================================
@@ -259,7 +288,7 @@ async def _inject_continue(ctx: LoopCtx) -> str:
 
 async def _finish(ctx: LoopCtx) -> str:
     """完成：更新时间戳并设置最终结果"""
-    from loop import LoopResult, db
+    from loop import db
 
     db.sessions.touch_timestamp(ctx.sid)
     ctx.loop_result = LoopResult(

@@ -44,6 +44,8 @@ from tool import (
 )
 from loop_nodes import (
     ApiError,
+    LoopCtx,
+    LoopResult,
     Node,
     TOOL_CONTINUE_PROMPT,
     TOOL_EXHAUSTED_PROMPT,
@@ -79,43 +81,6 @@ NONCE_EXPIRY_SECONDS = 300
 # ============================================================
 # 数据模型定义
 # ============================================================
-
-
-@dataclass
-class LoopCtx:
-    """
-    Agent Loop 循环上下文
-
-    封装循环所需的所有状态，通过 parent_msg_id 的有无区分 chat/regenerate 场景。
-    节点间通过额外字段传递中间数据，字段在节点执行过程中逐步填充。
-    """
-    sid: str
-    user_uuid: str
-    deps: "ChatDeps"
-    request_id: str
-    retry_of_request_id: str | None
-    parent_msg_id: str | None = None
-    version: int | None = None
-
-    # 节点间数据传递（由各节点逐步填充）
-    model_history: list["ModelMessage"] = field(default_factory=list)
-    result: AgentRunResult | None = None
-    output: AgentOutput | None = None
-    final_msg_id: str | None = None
-    loop_result: LoopResult | None = None
-    tracker: ToolCheck | None = None
-
-
-@dataclass
-class LoopResult:
-    """
-    Agent Loop 循环返回值
-    
-    封装循环完成后的结果。
-    """
-    answer: str
-    msg_id: str
-    version: int | None = None  # regenerate 时有值
 
 
 class ToolMode(str, Enum):
