@@ -43,7 +43,21 @@ from tool import (
     get_registered_tool_names,
 )
 from state import ToolCheck
-from loop_nodes import TOOL_EXHAUSTED_PROMPT, TOOL_FORCE_PROMPT, TOOL_CONTINUE_PROMPT
+from loop_nodes import (
+    Node,
+    TOOL_CONTINUE_PROMPT,
+    TOOL_EXHAUSTED_PROMPT,
+    TOOL_FORCE_PROMPT,
+    _call_agent,
+    _check_quota,
+    _finish,
+    _inject_continue,
+    _inject_exhausted,
+    _inject_force,
+    _load_history,
+    _persist_messages,
+    _update_tracker,
+)
 
 db = DatabaseFacade(db_path=DATABASE_PATH)
 
@@ -377,151 +391,30 @@ async def _call_model(
 
 
 # ============================================================
-# 核心业务逻辑
+# Agent Loop 状态图
 # ============================================================
 
+_LOOP_NODES: dict[str, Node] = {
+    "加载历史":   Node(run=_load_history,      edges={"ok": "配额检查"}),
+    "配额检查":   Node(run=_check_quota,       edges={"exhausted": "注入结束提示", "ok": "调用模型"}),
+    "注入结束提示": Node(run=_inject_exhausted,  edges={"ok": "调用模型"}),
+    "调用模型":   Node(run=_call_agent,        edges={"ok": "持久化消息"}),
+    "持久化消息": Node(run=_persist_messages,   edges={"ok": "计数更新"}),
+    "计数更新":   Node(run=_update_tracker,     edges={"force": "注入FORCE", "final": "结束", "continue": "注入继续"}),
+    "注入FORCE":  Node(run=_inject_force,      edges={"ok": "加载历史"}),
+    "注入继续":   Node(run=_inject_continue,   edges={"ok": "加载历史"}),
+    "结束":       Node(run=_finish,            edges={}),
+}
 
-async def _run_loop(ctx: LoopCtx) -> LoopResult:
-    """
-    统一的 Agent Loop 逻辑
-    
-    处理 chat 和 regenerate 两种场景的完整循环：
-    - 加载历史消息
-    - 调用 AI 模型
-    - 持久化消息
-    - FORCE 模式检查
-    - 循环控制
-    
-    通过 ctx.parent_msg_id 区分场景：
-    - None: chat 模式
-    - 非None: regenerate 模式（需要 parent_msg_id 和 version）
-    """
-    tracker = ToolCheck(
-        max_tool_loops=MAX_TOOL_LOOPS,
-        request_id=ctx.request_id,
-        retry_of_request_id=ctx.retry_of_request_id
-    )
-    
-    while True:
-        # 1. 从数据库加载历史消息（只加载 is_latest=1 的消息）
-        history_rows = db.messages.list_latest_by_session_for_user(
-            sid=ctx.sid,
-            user_uuid=ctx.user_uuid,
-        )
-        model_history = _to_history(history_rows)
 
-        # 2. 调用 AI 模型（如果配额已用完，则注入强制结束提示）
-        quota_exceeded = tracker.is_quota_exceeded()
-        
-        if quota_exceeded:
-            # 注入“额度已满”提示，强制 LLM 收尾
-            exhausted_msg = ModelRequest(parts=[UserPromptPart(content=TOOL_EXHAUSTED_PROMPT)])
-            db.messages.create_for_user(
-                sid=ctx.sid,
-                user_uuid=ctx.user_uuid,
-                kind="route_user",
-                raw_json=_to_json(exhausted_msg),
-                parent_msg_id=ctx.parent_msg_id,
-                version=ctx.version,
-            )
-            # 更新历史记录以包含强制提示
-            history_rows = db.messages.list_latest_by_session_for_user(
-                sid=ctx.sid,
-                user_uuid=ctx.user_uuid,
-            )
-            model_history = _to_history(history_rows)
-
-        result = await _call_model(
-            message_history=model_history,
-            deps=ctx.deps,
-            remaining_tool_calls=0 if quota_exceeded else tracker.remaining_calls,
-            request_id=ctx.request_id,
-            retry_of_request_id=ctx.retry_of_request_id,
-        )
-        
-        output = cast(AgentOutput, result.output)
-        is_final = output.tool_in_progress == 0
-        
-        # 4. 从 Pydantic AI 内置的 usage 获取工具调用次数
-        calls_in_run = result.usage().tool_calls
-        
-        # 5. 持久化 Agent 产生的所有新消息
-        new_messages = result.new_messages()
-        if ctx.parent_msg_id is not None:
-            # regenerate 模式
-            final_msg_id = db.messages.save_agent_messages(
-                sid=ctx.sid,
-                user_uuid=ctx.user_uuid,
-                new_messages=new_messages,
-                is_final_turn=is_final,
-                parent_msg_id=ctx.parent_msg_id,
-                version=ctx.version,
-            )
-        else:
-            # chat 模式
-            final_msg_id = db.messages.save_agent_messages(
-                sid=ctx.sid,
-                user_uuid=ctx.user_uuid,
-                new_messages=new_messages,
-                is_final_turn=is_final,
-            )
-        
-        tracker.update_usage(calls_in_run, is_final)
-        
-        # 6. FORCE 模式：必须至少调用一次工具
-        if tracker.should_force_continue(ctx.deps.tool_mode.value):
-            # 注入强制工具调用提示（保留数据库记录）
-            route_message = ModelRequest(parts=[UserPromptPart(content=TOOL_FORCE_PROMPT)])
-            if ctx.parent_msg_id is not None:
-                # regenerate 模式
-                db.messages.create_for_user(
-                    sid=ctx.sid,
-                    user_uuid=ctx.user_uuid,
-                    kind="route_user",
-                    raw_json=_to_json(route_message),
-                    parent_msg_id=ctx.parent_msg_id,
-                    version=ctx.version,
-                )
-            else:
-                # chat 模式
-                db.messages.create_for_user(
-                    sid=ctx.sid,
-                    user_uuid=ctx.user_uuid,
-                    kind="route_user",
-                    raw_json=_to_json(route_message),
-                )
-            continue
-        
-        # 7. AI 表示已完成 → 退出循环，返回最终答案
-        if is_final:
-            db.sessions.touch_timestamp(ctx.sid)
-            return LoopResult(
-                answer=output.answer,
-                msg_id=final_msg_id or "",
-                version=ctx.version,
-            )
-        
-        # 8. AI 表示还需继续 → 注入继续提示，进入下一轮
-        # 注入继续提示（保留数据库记录）
-        route_continue_message = ModelRequest(parts=[UserPromptPart(content=TOOL_CONTINUE_PROMPT)])
-        if ctx.parent_msg_id is not None:
-            # regenerate 模式
-            db.messages.create_for_user(
-                sid=ctx.sid,
-                user_uuid=ctx.user_uuid,
-                kind="route_user",
-                raw_json=_to_json(route_continue_message),
-                parent_msg_id=ctx.parent_msg_id,
-                version=ctx.version,
-            )
-        else:
-            # chat 模式
-            db.messages.create_for_user(
-                sid=ctx.sid,
-                user_uuid=ctx.user_uuid,
-                kind="route_user",
-                raw_json=_to_json(route_continue_message),
-            )
+async def _run_graph(ctx: LoopCtx) -> LoopResult:
+    """按声明式状态图执行 Agent Loop"""
+    current = "加载历史"
+    while current:
+        node = _LOOP_NODES[current]
+        route = await node.run(ctx)
+        current = node.edges.get(route, "")
+    return ctx.loop_result or LoopResult(answer="", msg_id="")
 
 
 async def _chat(
@@ -576,15 +469,20 @@ async def _chat(
         user_uuid=user_uuid,
     )
 
-    # 5. 构造循环上下文并调用统一循环
+    # 5. 构造循环上下文，初始化 tracker，调用状态图
     ctx = LoopCtx(
         sid=Usersend.sid,
         user_uuid=user_uuid,
         deps=deps,
         request_id=request_id,
         retry_of_request_id=Usersend.retry_of_request_id,
+        tracker=ToolCheck(
+            max_tool_loops=MAX_TOOL_LOOPS,
+            request_id=request_id,
+            retry_of_request_id=Usersend.retry_of_request_id,
+        ),
     )
-    result = await _run_loop(ctx)
+    result = await _run_graph(ctx)
 
     # 6. 返回响应
     return ChatSendResponse(
@@ -757,7 +655,7 @@ async def regenerate_message(
         user_uuid=user_uuid,
     )
 
-    # 构造循环上下文并调用统一循环
+    # 构造循环上下文，初始化 tracker，调用状态图
     ctx = LoopCtx(
         sid=sid,
         user_uuid=user_uuid,
@@ -766,8 +664,13 @@ async def regenerate_message(
         retry_of_request_id=None,
         parent_msg_id=Usersend.target_msg_id,
         version=new_version,
+        tracker=ToolCheck(
+            max_tool_loops=MAX_TOOL_LOOPS,
+            request_id=request_id,
+            retry_of_request_id=None,
+        ),
     )
-    result = await _run_loop(ctx)
+    result = await _run_graph(ctx)
 
     # 返回响应
     return RegenerateResponse(
