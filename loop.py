@@ -42,12 +42,13 @@ from tool import (
     effective_tools,
     get_registered_tool_names,
 )
-from state import ToolCheck
 from loop_nodes import (
+    ApiError,
     Node,
     TOOL_CONTINUE_PROMPT,
     TOOL_EXHAUSTED_PROMPT,
     TOOL_FORCE_PROMPT,
+    ToolCheck,
     _call_agent,
     _check_quota,
     _finish,
@@ -99,10 +100,10 @@ class LoopCtx:
     # 节点间数据传递（由各节点逐步填充）
     model_history: list["ModelMessage"] = field(default_factory=list)
     result: AgentRunResult | None = None
-    output: "AgentOutput" | None = None
+    output: AgentOutput | None = None
     final_msg_id: str | None = None
-    loop_result: "LoopResult" | None = None
-    tracker: "ToolCheck" | None = None
+    loop_result: LoopResult | None = None
+    tracker: ToolCheck | None = None
 
 
 @dataclass
@@ -173,18 +174,6 @@ class ChatSendResponse(BaseModel):
     retry_of_request_id: str | None = None
     assistant_message: str
     assistant_message_id: str
-
-
-class ApiError(BaseModel):
-    """
-    API 错误响应体（用于构造 HTTPException.detail）
-    """
-    code: str
-    message: str
-    request_id: str
-    retry_of_request_id: str | None = None
-    retryable: bool
-    detail: dict[str, Any] | None = None
 
 
 class AgentOutput(BaseModel):
