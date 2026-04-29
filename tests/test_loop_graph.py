@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from loop_nodes import (
     Node,
     _check_quota,
+    _update_tracker,
 )
 
 
@@ -22,6 +23,7 @@ class TestNode:
             return "next"
 
         node = Node(run=dummy, edges={"next": "终点"})
+        assert node.run is dummy
         assert node.edges == {"next": "终点"}
 
     def test_node_edges_empty(self):
@@ -112,8 +114,6 @@ class TestUpdateTracker:
 
     @pytest.mark.asyncio
     async def test_returns_force_when_force_mode_and_no_tool_call(self):
-        from loop_nodes import _update_tracker
-
         ctx = MagicMock()
         ctx.result.usage.return_value.tool_calls = 0
         ctx.output.tool_in_progress = 1
@@ -124,26 +124,22 @@ class TestUpdateTracker:
 
     @pytest.mark.asyncio
     async def test_returns_final_when_tool_in_progress_is_zero(self):
-        from loop_nodes import _update_tracker
-
         ctx = MagicMock()
         ctx.result.usage.return_value.tool_calls = 0
         ctx.output.tool_in_progress = 0
         ctx.tracker.should_force_continue.return_value = False
-        ctx.tracker.update_usage = MagicMock()
 
         result = await _update_tracker(ctx)
+        ctx.tracker.update_usage.assert_called_once_with(0, True)
         assert result == "final"
 
     @pytest.mark.asyncio
     async def test_returns_continue_when_still_needs_tools(self):
-        from loop_nodes import _update_tracker
-
         ctx = MagicMock()
         ctx.result.usage.return_value.tool_calls = 1
         ctx.output.tool_in_progress = 1
         ctx.tracker.should_force_continue.return_value = False
-        ctx.tracker.update_usage = MagicMock()
 
         result = await _update_tracker(ctx)
+        ctx.tracker.update_usage.assert_called_once_with(1, False)
         assert result == "continue"
