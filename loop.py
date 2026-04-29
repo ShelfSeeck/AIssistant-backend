@@ -414,6 +414,10 @@ async def _run_graph(ctx: LoopCtx) -> LoopResult:
         node = _LOOP_NODES[current]
         route = await node.run(ctx)
         current = node.edges.get(route, "")
+        if not current and route:
+            import logging
+            _log = logging.getLogger(__name__)
+            _log.warning("Unexpected route key '%s', terminating graph", route)
     return ctx.loop_result or LoopResult(answer="", msg_id="")
 
 
