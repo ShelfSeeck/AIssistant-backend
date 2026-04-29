@@ -12,7 +12,7 @@ loop_nodes.py — Agent Loop 状态图节点模块
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, TYPE_CHECKING
+from typing import Any, Awaitable, Callable, TYPE_CHECKING, cast
 
 from pydantic_ai.messages import ModelRequest, UserPromptPart
 
@@ -54,8 +54,6 @@ TOOL_CONTINUE_PROMPT = (
 # 状态节点函数
 # ============================================================
 
-from typing import cast
-
 
 async def _load_history(ctx: LoopCtx) -> str:
     """从数据库加载当前会话的最新消息历史"""
@@ -77,8 +75,8 @@ async def _check_quota(ctx: LoopCtx) -> str:
 
 
 async def _inject_exhausted(ctx: LoopCtx) -> str:
-    """注入工具配额耗尽提示并重新加载历史"""
-    from loop import _to_history, _to_json, db
+    """注入工具配额耗尽提示（历史由 _load_history 在下一轮重新加载）"""
+    from loop import _to_json, db
 
     exhausted_msg = ModelRequest(parts=[UserPromptPart(content=TOOL_EXHAUSTED_PROMPT)])
     db.messages.create_for_user(
@@ -89,11 +87,6 @@ async def _inject_exhausted(ctx: LoopCtx) -> str:
         parent_msg_id=ctx.parent_msg_id,
         version=ctx.version,
     )
-    history_rows = db.messages.list_latest_by_session_for_user(
-        sid=ctx.sid,
-        user_uuid=ctx.user_uuid,
-    )
-    ctx.model_history = _to_history(history_rows)
     return "ok"
 
 
