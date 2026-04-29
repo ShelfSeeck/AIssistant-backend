@@ -3,7 +3,7 @@ loop_nodes.py — Agent Loop 状态图节点模块
 
 本模块职责：
 1. 定义 Node 类（单节点：执行函数 + 出边映射）
-2. 提供 Agent Loop 所需的所有状态节点函数
+2. 提供 Agent Loop 所需的所有状态节点函数与工具用量校验
 3. 统一节点函数签名为 async (ctx: LoopCtx) -> str
 
 节点函数通过延迟导入访问 loop.py 中的共享资源（db, _to_history, _to_json, _call_model 等），
@@ -12,8 +12,10 @@ loop_nodes.py — Agent Loop 状态图节点模块
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, TYPE_CHECKING, cast
+from typing import Any, Awaitable, Callable, NoReturn, TYPE_CHECKING, cast
 
+from fastapi import HTTPException, status
+from pydantic import BaseModel
 from pydantic_ai.messages import ModelRequest, UserPromptPart
 
 if TYPE_CHECKING:
@@ -50,6 +52,89 @@ TOOL_CONTINUE_PROMPT = (
     "If everything is complete, set tool_in_progress to 0 and return the final answer."
 )
 
+
+# ============================================================
+# ApiError（HTTP 异常响应体）
+# ============================================================
+
+class ApiError(BaseModel):
+    """API 错误响应体（用于构造 HTTPException.detail）"""
+    code: str
+    message: str
+    request_id: str
+    retry_of_request_id: str | None = None
+    retryable: bool
+    detail: dict[str, Any] | None = None
+
+
+# ============================================================
+# ToolCheck（工具用量校验与循环控制）
+# ============================================================
+
+@dataclass
+class ToolCheck:
+    """工具调用计数、FORCE 模式校验以及循环次数限制"""
+    max_tool_loops: int
+    request_id: str
+    retry_of_request_id: str | None = None
+
+    total_tool_calls: int = 0
+    orchestration_round: int = 0
+    saw_tool_call: bool = False
+
+    def _err(
+        self,
+        status_code: int,
+        code: str,
+        message: str,
+        retryable: bool,
+        detail: dict[str, Any] | None = None,
+    ) -> NoReturn:
+        payload = ApiError(
+            code=code,
+            message=message,
+            request_id=self.request_id,
+            retry_of_request_id=self.retry_of_request_id,
+            retryable=retryable,
+            detail=detail,
+        ).model_dump(exclude_none=True)
+        raise HTTPException(status_code=status_code, detail=payload)
+
+    def is_quota_exceeded(self) -> bool:
+        return self.total_tool_calls >= self.max_tool_loops
+
+    def update_usage(self, calls_in_run: int, is_final: bool):
+        self.total_tool_calls += calls_in_run
+        if calls_in_run > 0:
+            self.saw_tool_call = True
+        if not is_final:
+            self.orchestration_round += 1
+            if self.orchestration_round > self.max_tool_loops * 2:
+                self._err(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    code="ORCHESTRATION_LIMIT_EXCEEDED",
+                    message="Orchestration loop limit exceeded",
+                    retryable=True,
+                )
+
+    def should_force_continue(self, tool_mode: str) -> bool:
+        if tool_mode == "force" and not self.saw_tool_call:
+            self.orchestration_round += 1
+            if self.orchestration_round > self.max_tool_loops:
+                self._err(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    code="TOOL_LOOP_LIMIT_EXCEEDED",
+                    message="Tool loop limit exceeded",
+                    retryable=True,
+                )
+            return True
+        return False
+
+    @property
+    def remaining_calls(self) -> int:
+        return max(self.max_tool_loops - self.total_tool_calls, 0)
+
+
 # ============================================================
 # 状态节点函数
 # ============================================================
@@ -69,6 +154,7 @@ async def _load_history(ctx: LoopCtx) -> str:
 
 async def _check_quota(ctx: LoopCtx) -> str:
     """检查工具调用配额是否已用尽"""
+    assert ctx.tracker is not None
     if ctx.tracker.is_quota_exceeded():
         return "exhausted"
     return "ok"
@@ -94,6 +180,7 @@ async def _call_agent(ctx: LoopCtx) -> str:
     """调用 AI 模型（重试逻辑在 _call_model 内部）"""
     from loop import _call_model, AgentOutput
 
+    assert ctx.tracker is not None
     remaining = 0 if ctx.tracker.is_quota_exceeded() else ctx.tracker.remaining_calls
     ctx.result = await _call_model(
         message_history=ctx.model_history or [],
@@ -125,6 +212,7 @@ async def _persist_messages(ctx: LoopCtx) -> str:
 
 async def _update_tracker(ctx: LoopCtx) -> str:
     """更新工具用量统计并决定下一步路由"""
+    assert ctx.tracker is not None
     usage = ctx.result.usage() if ctx.result else None
     calls_in_run = usage.tool_calls if usage else 0
     is_final = ctx.output.tool_in_progress == 0 if ctx.output else False
