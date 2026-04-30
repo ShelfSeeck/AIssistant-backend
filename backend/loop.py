@@ -16,18 +16,18 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from auth import get_current_user, verify_nonce
-from context import (
+from backend.auth import get_current_user, verify_nonce
+from backend.context import (
     ActionKind,
     LoopContext,
     LoopGraph,
     NodeName,
     _registry,
 )
-from tool import effective_tools
+from backend.tool import effective_tools
 
 # 导入 node 会触发所有 @register_node 装饰器，填充 _registry
-import node  # noqa: F401
+import backend.node as node  # noqa: F401
 
 # ── 常量 ──
 

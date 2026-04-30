@@ -32,7 +32,7 @@ from typing import Any
 from pydantic_ai import RunContext
 from pydantic_ai.tools import Tool
 
-from config import BASE_DIR
+from backend.config import BASE_DIR
 
 
 # ============================================================
@@ -212,7 +212,7 @@ def file_operation(
     - method: 操作方法名 (create_file, delete_file, create_dir, delete_dir, read_file, search_dir)
     - args: 传给该方法的字典参数。例如 {"path": "test.txt", "content": "hello"}
     """
-    from file import filesystem_tool_handler
+    from backend.file import filesystem_tool_handler
     
     deps = ctx.deps
     pid = getattr(deps, "pid", None) if scope == "project" else None

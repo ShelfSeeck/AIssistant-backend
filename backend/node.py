@@ -38,8 +38,8 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from config import DATABASE_PATH, create_chat_agent
-from context import (
+from backend.config import DATABASE_PATH, create_chat_agent
+from backend.context import (
     ActionKind,
     ChatDeps,
     LoopContext,
@@ -48,8 +48,8 @@ from context import (
     ToolMode,
     register_node,
 )
-from db import DatabaseFacade
-from tool import build_tools
+from backend.db import DatabaseFacade
+from backend.tool import build_tools
 
 
 # ── 辅助函数 ──

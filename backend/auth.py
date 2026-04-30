@@ -14,14 +14,14 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, Header
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
-from config import (
+from backend.config import (
     ACCESS_TOKEN_EXPIRE_MINUTES,
     DATABASE_PATH,
     JWT_ALGORITHM,
     JWT_SECRET,
     REFRESH_TOKEN_EXPIRE_DAYS,
 )
-from db import DatabaseFacade
+from backend.db import DatabaseFacade
 
 
 router = APIRouter(prefix="/auth", tags=["auth"])

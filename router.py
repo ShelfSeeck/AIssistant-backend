@@ -2,11 +2,11 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from auth import router as auth_router
-from config import APP_NAME, DATABASE_PATH
-from data import router as data_router
-from db import DatabaseFacade
-from loop import router as loop_router
+from backend.auth import router as auth_router
+from backend.config import APP_NAME, DATABASE_PATH
+from backend.data import router as data_router
+from backend.db import DatabaseFacade
+from backend.loop import router as loop_router
 
 
 db = DatabaseFacade(db_path=DATABASE_PATH)

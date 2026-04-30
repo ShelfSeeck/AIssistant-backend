@@ -138,8 +138,8 @@ def filesystem_tool_handler(
     根据参数决定是 ProjectFile 还是 UserFile。
     """
     try:
-        from db import DatabaseFacade
-        from config import DATABASE_PATH
+        from backend.db import DatabaseFacade
+        from backend.config import DATABASE_PATH
         db = DatabaseFacade(DATABASE_PATH)
 
         if pid:
