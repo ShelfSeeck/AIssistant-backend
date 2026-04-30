@@ -17,11 +17,9 @@ DONTREADME.md
 # github
 .github
 #temperary files
-project.db
-temptest
 projects
 users
 .env
 .claude
-.worktrees/
 docs
+data

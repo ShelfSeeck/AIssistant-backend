@@ -11,8 +11,8 @@ BASE_DIR = Path(__file__).resolve().parent
 
 # 后端基础配置（后续文件直接 import 使用）。
 APP_NAME = os.getenv("APP_NAME", "Agentist")
-DATABASE_PATH = os.getenv("DATABASE_PATH", str(BASE_DIR / "project.db"))
-SKILL_STORAGE_DIR = os.getenv("SKILL_STORAGE_DIR", str(BASE_DIR / "skills_storage"))
+DATABASE_PATH = os.getenv("DATABASE_PATH", str(BASE_DIR /"data" / "project.db"))
+SKILL_STORAGE_DIR = os.getenv("SKILL_STORAGE_DIR", str(BASE_DIR / "data" / "skills_storage"))
 
 # JWT 配置，先给开发默认值，生产环境请务必通过环境变量覆盖。
 JWT_SECRET = os.getenv("JWT_SECRET", "")#JWT密钥
