@@ -4,6 +4,20 @@
     async def xxx_node(ctx: LoopContext) -> NodeOutput
 
 节点函数只执行业务逻辑，不控制流程去向 —— 流程由 loop.py 的图 + run_loop 决定。
+
+SSE 事件类型说明：
+- text_delta: 模型输出的文本片段（逐字推送）
+- tool_call: 工具调用开始，仅含 tool_name（参数不暴露）
+- tool_result: 工具执行结束，含 tool_name + status
+- tool_summary: [预留] 工具调用总结，后期由 Agent 生成摘要后推送
+- done: 最终结束帧
+
+后期扩展 tool_summary 的方式：
+1. 在 call_model_node 的 PartEndEvent(ToolReturnPart) 分支中，
+   调用总结 Agent 生成摘要：
+   summary = await summary_agent.run(tool_name, tool_args, tool_result)
+   await _emit(ctx, {"type": "tool_summary", "content": summary})
+2. 或在 LoopGraph 中注入 hook，在工具执行后触发总结。
 """
 
 from __future__ import annotations
@@ -14,8 +28,6 @@ from typing import Any
 from pydantic import TypeAdapter
 from pydantic_ai import AgentRunResultEvent
 from pydantic_ai.messages import (
-    FunctionToolCallEvent,
-    FunctionToolResultEvent,
     ModelMessage,
     ModelRequest,
     PartDeltaEvent,
@@ -194,28 +206,20 @@ async def call_model_node(ctx: LoopContext) -> NodeOutput:
 
             elif isinstance(event, PartEndEvent):
                 if isinstance(event.part, ToolCallPart):
+                    # 只推送工具名，不暴露参数细节
+                    # 后期可注入总结 Agent，在 tool_result 后生成 tool_summary 事件
                     await _emit(ctx, {
                         "type": "tool_call",
                         "tool_name": event.part.tool_name,
-                        "args": str(event.part.args),
                     })
                 elif isinstance(event.part, ToolReturnPart):
+                    # 只推送工具名和状态，不暴露返回内容
+                    # 后期可在此处调用总结 Agent，生成 tool_summary 推送
                     await _emit(ctx, {
                         "type": "tool_result",
                         "tool_name": event.part.tool_name,
+                        "status": "success" if event.part.content else "error",
                     })
-
-            elif isinstance(event, FunctionToolCallEvent):
-                await _emit(ctx, {
-                    "type": "tool_call",
-                    "tool_name": event.part.tool_name,
-                })
-
-            elif isinstance(event, FunctionToolResultEvent):
-                await _emit(ctx, {
-                    "type": "tool_result",
-                    "tool_name": event.result.tool_name,
-                })
 
             elif isinstance(event, AgentRunResultEvent):
                 last_result = event
