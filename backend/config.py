@@ -4,6 +4,7 @@ from pathlib import Path
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
+from backend.context import ChatDeps
 
 
 # 项目根目录用于拼接默认数据库和技能存储目录。
@@ -43,9 +44,14 @@ def get_chat_model() -> OpenAIChatModel:
     )
 
 
-def create_chat_agent(instructions: str | None = None) -> Agent:
-    """创建一个可复用的 Pydantic AI Agent。使用函数来实现复用"""
+def create_chat_agent(
+    instructions: str | None = None,
+    tools: list | None = None,
+) -> Agent[ChatDeps,str]:
+    """创建一个可复用的 Pydantic AI Agent。使用函数来实现复用。目前仍是每次调用都创建新实例，并在新实例中注入工具。后续可改为单例模式或工厂模式以提升性能。"""
     return Agent(
         get_chat_model(),
         instructions=instructions or "You are a helpful assistant.",
+        tools=tools or [],
+        deps_type=ChatDeps
     )

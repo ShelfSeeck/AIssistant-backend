@@ -10,24 +10,24 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import AsyncGenerator
 from typing import Any
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from auth import get_current_user, verify_nonce
-from context import (
+from backend.auth import get_current_user, verify_nonce
+from backend.context import (
     ActionKind,
     LoopContext,
     LoopGraph,
     NodeName,
     _registry,
 )
-from tool import effective_tools
 
 # 导入 node 会触发所有 @register_node 装饰器，填充 _registry
-import node  # noqa: F401
+import backend.node as node  # noqa: F401
 
 # ── 常量 ──
 
@@ -101,7 +101,7 @@ async def run_loop(ctx: LoopContext, entry: NodeName) -> None:
         if _graph.is_terminal(current):
             break
 
-        node_fn = _registry.get(current)
+        node_fn = _registry.get(current)#获取当前节点的执行函数实例
         if node_fn is None:
             ctx.error = f"Node not registered: {current}"
             ctx.error_code = "LOOP_CONFIG_ERROR"
@@ -133,7 +133,7 @@ async def run_loop(ctx: LoopContext, entry: NodeName) -> None:
 # ── SSE 流式响应 ──
 
 
-async def stream_response(ctx: LoopContext) -> str:
+async def stream_response(ctx: LoopContext) -> AsyncGenerator[str, None]:
     """SSE 生成器: 启动引擎并逐帧消费事件队列。"""
     queue: asyncio.Queue = asyncio.Queue()
     ctx.sse_queue = queue
@@ -197,7 +197,7 @@ async def chat_loop(
         action=ActionKind(payload.action),
         user_input=payload.message,
         parent_msg_id=payload.parent_msg_id,
-        allowed_tools=effective_tools(payload.allowed_tools),
+        allowed_tools=payload.allowed_tools,
     )
 
     return StreamingResponse(

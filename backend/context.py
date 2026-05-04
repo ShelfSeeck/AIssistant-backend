@@ -53,7 +53,7 @@ class LoopContext:
     user_uuid: str
     pid: str
     sid: str
-    allowed_tools: set[str] = field(default_factory=set)
+    allowed_tools: list[str] | None = None
 
     action: ActionKind = ActionKind.SEND
 
@@ -85,7 +85,7 @@ class NodeOutput:
     extra: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True)#frozen表示不可变
 class ChatDeps:
     """注入 PydanticAI Agent 的依赖对象。
 
@@ -95,7 +95,7 @@ class ChatDeps:
     user_uuid: str
     pid: str
     sid: str
-    allowed_tools: set[str]
+    allowed_tools: list[str] | None
     tool_mode: ToolMode = ToolMode.ON
 
 
@@ -116,8 +116,9 @@ _registry: dict[NodeName, NodeFn] = {}
 
 
 def register_node(name: NodeName):
-    """装饰器：将异步函数注册为图节点。
-
+    """
+    需要自己设置节点名称
+    装饰器：将异步函数注册为图节点。
     同一 name 重复注册会覆盖。
     """
 
@@ -132,8 +133,8 @@ def register_node(name: NodeName):
 
 
 class LoopGraph:
-    """有向状态机图：声明节点间的转换边及条件。
-
+    """
+    有向状态机图：声明节点间的转换边及条件。
     边由 add_edge 声明，条件函数从 LoopContext 读取信息做判断。
     run_loop 引擎在每步查图决定下一跳。
     后期可通过 set_router() 注入路由 Agent 替代默认策略。

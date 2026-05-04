@@ -15,10 +15,10 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from auth import get_current_user
-from config import APP_NAME, DATABASE_PATH
-from db import DatabaseFacade
-from tool import effective_tools, get_registered_tool_names
+from backend.auth import get_current_user
+from backend.config import APP_NAME, DATABASE_PATH
+from backend.db import DatabaseFacade
+from backend.tool import get_registered_tool_names
 
 
 db = DatabaseFacade(db_path=DATABASE_PATH)
@@ -197,7 +197,7 @@ def list_tool_registry() -> ToolRegistryResponse:
     """查询工具注册表。"""
     return ToolRegistryResponse(
         tools=sorted(get_registered_tool_names()),
-        global_allowed_tools=sorted(effective_tools(None)),
+        global_allowed_tools=sorted(get_registered_tool_names()),
     )
 
 
