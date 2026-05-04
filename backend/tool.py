@@ -4,8 +4,7 @@ tool.py - AI 工具定义与组装模块
 本模块职责：
 1. 定义工具函数的执行逻辑（文件读取、目录遍历等）。
 2. 维护工具注册表（register_tool / _TOOL_REGISTRY / _REGISTERED_TOOL_NAMES）。
-3. 处理工具权限边界（ALLOWED_TOOLS_GLOBAL + effective_tools）。
-4. 提供 build_tools，把注册函数包装为 Agent 可用的 Tool 列表。
+3. 提供 build_tools，根据 allowed 参数过滤并构建 Agent 可用的 Tool 列表。
 
 与其他模块关系：
 - loop.py：负责模型编排与重试，通过 build_tools 注入可调用工具。
@@ -16,40 +15,18 @@ tool.py - AI 工具定义与组装模块
 1. 在本文件新增函数，首参使用 ctx: RunContext[Any]。
 2. 返回值约定为 dict[str, Any]（成功/错误都走结构化返回）。
 3. 使用 @register_tool 装饰器注册，函数名即工具名。
-4. 确认工具名在 ALLOWED_TOOLS_GLOBAL 和请求 allowed_tools 的交集内。
-5. 无需改 loop.py，Agent 启动时会通过 build_tools 自动纳入。
+4. 无需改 loop.py，Agent 启动时会通过 build_tools 自动纳入。
 
 调用链路：
-register_tool -> build_tools -> Agent(tools=...) -> prepare_tools 过滤 -> guarded 校验 -> 工具函数执行
+register_tool -> build_tools(allowed=...) -> Agent(tools=...) -> 工具函数执行
 """
 
 from __future__ import annotations
 
-from functools import wraps
-from pathlib import Path
 from typing import Any
 
 from pydantic_ai import RunContext
 from pydantic_ai.tools import Tool
-
-from backend.config import BASE_DIR
-
-
-# ============================================================
-# 全局配置
-# ============================================================
-
-# 后端全局允许的工具白名单
-# - None: 允许所有已注册的工具
-# - set[str]: 只允许指定的工具（必须是已注册的）
-# 这是安全边界，前端请求只能在此范围内进一步限制，不能扩展
-ALLOWED_TOOLS_GLOBAL: set[str] | None = {
-    "file_operation",
-}
-
-# ============================================================
-# 工具注册表（内部状态）
-# ============================================================
 
 # 已注册工具名称集合，用于快速查找和权限校验
 _REGISTERED_TOOL_NAMES: set[str] = set()
@@ -93,97 +70,24 @@ def get_tool_registry() -> dict[str, Any]:
     return dict(_TOOL_REGISTRY)
 
 
+def build_tools(allowed: list[str] | None = None) -> list[Tool[Any]]:
+    """根据注册表和 allowed 过滤，构建 Pydantic AI Tool 列表。
 
-def _create_guarded_tool(func: Any, tool_name: str) -> Any:
-    """为工具函数创建带安全检查的包装器。"""
+    参数:
+        allowed: 允许的工具名列表。None 表示返回所有已注册工具。
 
-    @wraps(func)
-    def guarded(ctx: RunContext[Any], *args: Any, **kwargs: Any) -> dict[str, Any]:
-        deps = ctx.deps
-        registered_tools = get_registered_tool_names()
-
-        if tool_name not in registered_tools:
-            return {
-                "error": "tool_invalid",
-                "tool_name": tool_name,
-            }
-
-        if ALLOWED_TOOLS_GLOBAL is not None and tool_name not in ALLOWED_TOOLS_GLOBAL:
-            return {
-                "error": "tool_not_enabled",
-                "tool_name": tool_name,
-            }
-
-        tool_mode = getattr(deps, "tool_mode", None)
-        tool_mode_value = getattr(tool_mode, "value", tool_mode)
-        if tool_mode_value == "off":
-            return {
-                "error": "tools_disabled",
-                "tool_name": tool_name,
-            }
-
-        allowed_tools = getattr(deps, "allowed_tools", None)
-        if not allowed_tools or tool_name not in allowed_tools:
-            return {
-                "error": "tool_not_allowed",
-                "tool_name": tool_name,
-            }
-
-        return func(ctx, *args, **kwargs)
-
-    return guarded
-
-
-def build_tools() -> list[Tool[Any]]:
-    """将注册表中的工具函数包装后构建为 Pydantic AI Tool 列表。"""
+    返回:
+        只包含已注册且在 allowed 范围内的 Tool 对象列表。
+    """
     tool_registry = get_tool_registry()
+    allowed_set = set(allowed) if allowed else None
     tools: list[Tool[Any]] = []
     for tool_name, func in tool_registry.items():
-        guarded_func = _create_guarded_tool(func, tool_name)
-        tools.append(Tool(guarded_func))
+        if allowed_set is not None and tool_name not in allowed_set:
+            continue
+        tools.append(Tool(func))
     return tools
 
-
-def effective_tools(request_allowed_tools: list[str] | None) -> set[str]:
-    """
-    计算本次请求实际可用的工具集合。
-
-    规则：
-    1. 先取已注册工具。
-    2. 再应用后端全局白名单 ALLOWED_TOOLS_GLOBAL。
-    3. 最后与请求级 allowed_tools 求交集。
-
-    结论：前端只能缩小工具范围，不能突破后端白名单。
-    """
-    # 第一层：已注册的工具
-    registered_tools = set(_REGISTERED_TOOL_NAMES)
-    
-    # 第二层：后端全局白名单过滤
-    if ALLOWED_TOOLS_GLOBAL is None:
-        global_allowed = registered_tools
-    else:
-        global_allowed = {name for name in ALLOWED_TOOLS_GLOBAL if name in registered_tools}
-
-    # 第三层：前端请求级别过滤
-    if request_allowed_tools is None:
-        return global_allowed
-
-    requested = {name.strip() for name in request_allowed_tools if name.strip()}
-    return {name for name in requested if name in global_allowed}
-
-
-def _resolve_workspace_path(raw_path: str) -> Path:
-    candidate = Path(raw_path)
-    if not candidate.is_absolute():
-        candidate = (BASE_DIR / candidate).resolve()
-    else:
-        candidate = candidate.resolve()
-
-    base = BASE_DIR.resolve()
-    if candidate != base and base not in candidate.parents:
-        raise ValueError("Path is outside workspace root")
-
-    return candidate
 
 
 # ============================================================
