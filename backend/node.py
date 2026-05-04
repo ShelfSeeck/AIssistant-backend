@@ -176,7 +176,7 @@ async def call_model_node(ctx: LoopContext) -> NodeOutput:
         tool_mode=ToolMode.ON,
     )
 
-    agent = create_chat_agent().with_tools(build_tools())
+    agent = create_chat_agent()
     ctx.response_text = ""
     # 新一轮调用开始，清除上一轮的临时错误状态
     ctx.error = None
@@ -226,8 +226,8 @@ async def call_model_node(ctx: LoopContext) -> NodeOutput:
 
         if last_result is not None:
             result = last_result.result
-            ctx.messages = ctx.history_messages + list(result.new_messages)
-            ctx.tool_rounds = result.usage.tool_calls
+            ctx.messages = ctx.history_messages + list(result.new_messages())
+            ctx.tool_rounds = result.usage().tool_calls
         else:
             ctx.error = "No AgentRunResultEvent received"
             ctx.error_code = "MODEL_CALL_FAILED"
