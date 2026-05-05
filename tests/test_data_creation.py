@@ -96,3 +96,51 @@ def test_create_project_for_other_user_rejected(client: TestClient, tmp_db):
     assert resp.status_code == 403
     body = resp.json()
     assert body["detail"]["code"] == "FORBIDDEN"
+
+
+def test_create_session_success(client: TestClient, tmp_db):
+    """在项目下成功创建会话，返回 201。"""
+    user_uuid, token = _create_user_and_token(tmp_db)
+    project = tmp_db.projects.create(projectname="测试项目", user_uuid=user_uuid)
+
+    resp = client.post(
+        f"/projects/{project['pid']}/sessions",
+        json={"sessionname": "对话 1"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["sessionname"] == "对话 1"
+    assert "sid" in body and len(body["sid"]) > 0
+    assert "timestamp" in body and isinstance(body["timestamp"], float)
+    assert "created_at" in body and isinstance(body["created_at"], float)
+
+
+def test_create_session_empty_name_rejected(client: TestClient, tmp_db):
+    """空会话名应被拒绝，返回 422。"""
+    user_uuid, token = _create_user_and_token(tmp_db)
+    project = tmp_db.projects.create(projectname="测试项目", user_uuid=user_uuid)
+
+    resp = client.post(
+        f"/projects/{project['pid']}/sessions",
+        json={"sessionname": ""},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 422
+
+
+def test_create_session_project_not_found(client: TestClient, tmp_db):
+    """项目不存在时返回 404。"""
+    _, token = _create_user_and_token(tmp_db)
+
+    resp = client.post(
+        "/projects/nonexistent-pid/sessions",
+        json={"sessionname": "对话"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 404
+    body = resp.json()
+    assert body["detail"]["code"] == "RESOURCE_NOT_FOUND"

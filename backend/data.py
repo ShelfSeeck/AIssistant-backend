@@ -73,6 +73,12 @@ class SessionListResponse(BaseModel):
     sessions: list[SessionItem]
 
 
+class CreateSessionRequest(BaseModel):
+    """创建会话请求"""
+
+    sessionname: str = Field(..., min_length=1, max_length=100, description="会话名称")
+
+
 class MessageItem(BaseModel):
     """消息信息"""
 
@@ -179,6 +185,43 @@ def list_project_sessions(
             )
             for s in sessions
         ]
+    )
+
+
+@router.post(
+    "/projects/{pid}/sessions",
+    response_model=SessionItem,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_project_session(
+    pid: str,
+    payload: CreateSessionRequest,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> SessionItem:
+    """在项目下创建新会话。"""
+    user_uuid = current_user.get("uuid")
+    if not isinstance(user_uuid, str):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "AUTH_TOKEN_INVALID", "message": "Invalid token"},
+        )
+
+    project = db.projects.get_for_user(pid=pid, user_uuid=user_uuid)
+    if project is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "RESOURCE_NOT_FOUND", "message": "Project not found"},
+        )
+
+    session = db.sessions.create(
+        pid=pid,
+        sessionname=payload.sessionname,
+    )
+    return SessionItem(
+        sid=session["sid"],
+        sessionname=session["sessionname"],
+        timestamp=float(session["timestamp"]),
+        created_at=float(session["created_at"]),
     )
 
 
