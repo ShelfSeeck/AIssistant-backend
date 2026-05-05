@@ -58,15 +58,6 @@ class CreateProjectRequest(BaseModel):
     projectname: str = Field(..., min_length=1, max_length=100, description="项目名称")
 
 
-class CreateProjectResponse(BaseModel):
-    """创建项目响应"""
-
-    pid: str
-    projectname: str
-    timestamp: float
-    created_at: float
-
-
 class SessionItem(BaseModel):
     """会话信息"""
 
@@ -130,14 +121,14 @@ def list_user_projects(
 
 @router.post(
     "/users/{user_id}/projects",
-    response_model=CreateProjectResponse,
+    response_model=ProjectItem,
     status_code=status.HTTP_201_CREATED,
 )
 def create_user_project(
     user_id: str,
     payload: CreateProjectRequest,
     current_user: dict[str, Any] = Depends(get_current_user),
-) -> CreateProjectResponse:
+) -> ProjectItem:
     """为用户创建新项目。"""
     jwt_user_uuid = current_user.get("uuid")
     if user_id != jwt_user_uuid:
@@ -149,7 +140,7 @@ def create_user_project(
         projectname=payload.projectname,
         user_uuid=user_id,
     )
-    return CreateProjectResponse(
+    return ProjectItem(
         pid=project["pid"],
         projectname=project["projectname"],
         timestamp=float(project["timestamp"]),
