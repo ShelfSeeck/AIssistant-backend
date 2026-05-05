@@ -8,7 +8,7 @@ from backend.context import ChatDeps
 
 
 # 项目根目录用于拼接默认数据库和技能存储目录。
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 
 # 后端基础配置（后续文件直接 import 使用）。
 APP_NAME = os.getenv("APP_NAME", "Agentist")
