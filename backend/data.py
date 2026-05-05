@@ -52,6 +52,21 @@ class ProjectListResponse(BaseModel):
     projects: list[ProjectItem]
 
 
+class CreateProjectRequest(BaseModel):
+    """创建项目请求"""
+
+    projectname: str = Field(..., min_length=1, max_length=100, description="项目名称")
+
+
+class CreateProjectResponse(BaseModel):
+    """创建项目响应"""
+
+    pid: str
+    projectname: str
+    timestamp: float
+    created_at: float
+
+
 class SessionItem(BaseModel):
     """会话信息"""
 
@@ -110,6 +125,35 @@ def list_user_projects(
             )
             for p in projects
         ]
+    )
+
+
+@router.post(
+    "/users/{user_id}/projects",
+    response_model=CreateProjectResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_user_project(
+    user_id: str,
+    payload: CreateProjectRequest,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> CreateProjectResponse:
+    """为用户创建新项目。"""
+    jwt_user_uuid = current_user.get("uuid")
+    if user_id != jwt_user_uuid:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "FORBIDDEN", "message": "Cannot create project for other user"},
+        )
+    project = db.projects.create(
+        projectname=payload.projectname,
+        user_uuid=user_id,
+    )
+    return CreateProjectResponse(
+        pid=project["pid"],
+        projectname=project["projectname"],
+        timestamp=float(project["timestamp"]),
+        created_at=float(project["created_at"]),
     )
 
 
