@@ -33,6 +33,19 @@ import backend.node as node  # noqa: F401
 
 MAX_RETRIES = 3
 
+# ── 用户锁 & 运行中任务 ──
+
+_user_locks: dict[str, asyncio.Lock] = {}
+_running_tasks: dict[str, asyncio.Task] = {}
+
+
+def get_user_lock(user_uuid: str) -> asyncio.Lock:
+    """获取用户的互斥锁（不存在则创建）。"""
+    if user_uuid not in _user_locks:
+        _user_locks[user_uuid] = asyncio.Lock()
+    return _user_locks[user_uuid]
+
+
 # ── 条件函数 ──
 # 签名: (ctx: LoopContext) -> bool
 # 由图引擎在每步查询时调用，依据 LoopContext 状态判断边是否可选。
@@ -84,6 +97,11 @@ _graph.add_edge(NodeName.CALL_MODEL, NodeName.STREAM_ERROR, condition=_has_error
 
 # 收束
 _graph.add_edge(NodeName.SAVE, NodeName.STREAM_COMPLETE)
+
+# 所有出口 → RELEASE_LOCK（确保锁释放）
+_graph.add_edge(NodeName.STREAM_COMPLETE, NodeName.RELEASE_LOCK)
+_graph.add_edge(NodeName.STREAM_ERROR, NodeName.RELEASE_LOCK)
+_graph.add_edge(NodeName.STOP, NodeName.RELEASE_LOCK)
 
 
 # ── 引擎 ──
@@ -141,16 +159,25 @@ async def stream_response(ctx: LoopContext) -> AsyncGenerator[str, None]:
     entry = _graph.entry_node(ctx.action)
     run_task = asyncio.create_task(run_loop(ctx, entry))
 
-    while True:
-        try:
-            event = await asyncio.wait_for(queue.get(), timeout=15)
-            yield f"data: {json.dumps(event, default=str)}\n\n"
-        except asyncio.TimeoutError:
-            if run_task.done():
-                break
+    # 存储运行中任务（用于 STOP 取消），STOP 请求自身不存储
+    if ctx.action != ActionKind.STOP:
+        _running_tasks[ctx.user_uuid] = run_task
 
-    # 传播引擎异常（如有）
-    await run_task
+    try:
+        while True:
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=15)
+                yield f"data: {json.dumps(event, default=str)}\n\n"
+            except asyncio.TimeoutError:
+                if run_task.done():
+                    break
+
+        # 传播引擎异常（如有）
+        await run_task
+    except asyncio.CancelledError:
+        pass
+    finally:
+        _running_tasks.pop(ctx.user_uuid, None)
 
     # 发送结束帧
     done_event: dict[str, Any] = {"type": "done"}
