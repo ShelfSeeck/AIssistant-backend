@@ -84,6 +84,16 @@ async def validate_node(ctx: LoopContext) -> NodeOutput:
         ctx.error_code = "FORBIDDEN"
         return NodeOutput(transition=NodeName.STREAM_ERROR)
 
+    # 用户锁校验: send/regenerate 需要获取锁
+    if ctx.action in (ActionKind.SEND, ActionKind.REGENERATE):
+        from backend.loop import get_user_lock
+        lock = get_user_lock(ctx.user_uuid)
+        if lock.locked():
+            ctx.error = "AI is generating, please wait"
+            ctx.error_code = "SESSION_BUSY"
+            return NodeOutput(transition=NodeName.STREAM_ERROR)
+        await lock.acquire()
+
     if ctx.action == ActionKind.REGENERATE:
         if not ctx.parent_msg_id:
             ctx.error = "Missing parent_msg_id for regenerate"
@@ -108,6 +118,31 @@ async def validate_node(ctx: LoopContext) -> NodeOutput:
             ctx.error = "Missing project id"
             ctx.error_code = "BAD_REQUEST"
             return NodeOutput(transition=NodeName.STREAM_ERROR)
+
+    return NodeOutput()
+
+
+@register_node(NodeName.STOP)
+async def stop_node(ctx: LoopContext) -> NodeOutput:
+    """取消正在运行的任务并释放锁。
+
+    STOP 不需要获取锁 —— 它的职责是取消当前任务。
+    """
+    import asyncio
+    from backend.loop import _running_tasks, get_user_lock
+
+    task = _running_tasks.pop(ctx.user_uuid, None)
+    if task and not task.done():
+        task.cancel()
+        try:
+            await asyncio.shield(task)
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    # 确保锁被释放（如果任务没有正常释放）
+    lock = get_user_lock(ctx.user_uuid)
+    if lock.locked():
+        lock.release()
 
     return NodeOutput()
 
@@ -265,4 +300,17 @@ async def save_node(ctx: LoopContext) -> NodeOutput:
         ctx.response_msg_id = response_msg_id
 
     db.sessions.touch_timestamp(sid=ctx.sid)
+    return NodeOutput()
+
+
+@register_node(NodeName.RELEASE_LOCK)
+async def release_lock_node(ctx: LoopContext) -> NodeOutput:
+    """释放用户锁。所有路径的最终出口。"""
+    from backend.loop import _running_tasks, get_user_lock
+
+    lock = get_user_lock(ctx.user_uuid)
+    if lock.locked():
+        lock.release()
+
+    _running_tasks.pop(ctx.user_uuid, None)
     return NodeOutput()

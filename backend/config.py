@@ -8,12 +8,12 @@ from backend.context import ChatDeps
 
 
 # 项目根目录用于拼接默认数据库和技能存储目录。
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 
 # 后端基础配置（后续文件直接 import 使用）。
 APP_NAME = os.getenv("APP_NAME", "Agentist")
 DATABASE_PATH = os.getenv("DATABASE_PATH", str(BASE_DIR /"data" / "project.db"))
-SKILL_STORAGE_DIR = os.getenv("SKILL_STORAGE_DIR", str(BASE_DIR / "data" / "skills_storage"))
+SKILL_STORAGE_DIR = os.getenv("SKILL_STORAGE_DIR", str(BASE_DIR / "data" / "skills"))
 
 # JWT 配置，先给开发默认值，生产环境请务必通过环境变量覆盖。
 JWT_SECRET = os.getenv("JWT_SECRET", "")#JWT密钥
@@ -51,7 +51,7 @@ def create_chat_agent(
     """创建一个可复用的 Pydantic AI Agent。使用函数来实现复用。目前仍是每次调用都创建新实例，并在新实例中注入工具。后续可改为单例模式或工厂模式以提升性能。"""
     return Agent(
         get_chat_model(),
-        instructions=instructions or "You are a helpful assistant.",
+        instructions=instructions or "你是一个智能助手",
         tools=tools or [],
         deps_type=ChatDeps
     )

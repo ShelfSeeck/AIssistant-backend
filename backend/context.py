@@ -38,6 +38,7 @@ class NodeName(StrEnum):
     STREAM_COMPLETE = "stream_complete"
     STREAM_ERROR = "stream_error"
     STOP = "stop"
+    RELEASE_LOCK = "release_lock"
 
 
 class ToolMode(StrEnum):
@@ -144,9 +145,7 @@ class LoopGraph:
         self._edges: dict[NodeName, dict[NodeName, ConditionFn | None]] = {}
         self._entry: dict[ActionKind, NodeName] = {}
         self._terminal: set[NodeName] = {
-            NodeName.STREAM_COMPLETE,
-            NodeName.STREAM_ERROR,
-            NodeName.STOP,
+            NodeName.RELEASE_LOCK,
         }
         self._router: RouterFn | None = None
 
