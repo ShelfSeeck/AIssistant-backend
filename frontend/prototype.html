@@ -1,0 +1,433 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Teachi - AI 助教</title>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            bgMain: '#f3f4f6',
+            bgSidebar: '#ffffff',
+            borderLight: '#d1d5db',
+            borderDark: '#1f2937',
+            highlight: '#e5e7eb',
+            highlightUser: '#f9fafb',
+          },
+          fontFamily: {
+            sans: ['Inter', 'system-ui', 'sans-serif'],
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    body { margin: 0; overflow: hidden; color: #1f2937; }
+    .wire-btn { @apply flex items-center justify-start gap-2 px-3 py-2.5 rounded-lg border border-transparent hover:bg-highlight hover:border-borderLight transition-colors cursor-pointer w-full text-left text-sm min-h-[40px]; }
+    .wire-btn-active { @apply bg-highlight border-borderLight font-medium; }
+    .wire-card { @apply border border-borderLight rounded-2xl p-4 bg-white hover:bg-highlightUser transition-colors cursor-pointer; }
+  </style>
+</head>
+<body class="bg-bgMain h-screen flex">
+  <div id="app" class="flex w-full h-full">
+
+    <div v-if="sidebarOpen && isMobile" @click="sidebarOpen = false" class="fixed inset-0 bg-black/20 z-40"></div>
+
+    <aside :class="[
+        'bg-bgSidebar border-r border-borderLight flex flex-col transition-all duration-300 z-50 fixed md:relative h-full',
+        sidebarOpen ? 'w-64 translate-x-0' : '-translate-x-full md:translate-x-0 md:w-0 overflow-hidden border-none'
+      ]">
+      <div class="p-4 w-64 flex-shrink-0 flex flex-col h-full">
+        <div class="flex items-center gap-2 px-2 mb-6 mt-2 cursor-pointer" @click="goHome">
+          <span class="font-bold text-xl tracking-tight">Teachi</span>
+        </div>
+
+        <div class="flex-1 overflow-y-auto no-scrollbar">
+          <div class="text-xs text-gray-500 font-medium px-2 mb-2">我的科目</div>
+          <div class="flex flex-col gap-1">
+            <button v-for="subject in previewSubjects" :key="subject.id"
+              @click="goToSubject(subject)"
+              :class="['wire-btn', currentSubject?.id === subject.id ? 'wire-btn-active' : '']">
+              <svg class="w-4 h-4 text-gray-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path></svg>
+              <span class="truncate text-sm">{{ subject.name }}</span>
+            </button>
+            <button @click="goHome" class="wire-btn text-sm text-gray-500 border-dashed border-borderLight hover:border-solid">
+              查看全部科目
+            </button>
+          </div>
+        </div>
+
+        <div class="mt-4 pt-4 border-t border-borderLight space-y-1 flex-shrink-0">
+          <button class="wire-btn text-sm">
+            <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+            文档
+          </button>
+          <button class="wire-btn text-sm">
+            <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
+            仪表盘
+          </button>
+          <button class="wire-btn text-sm">
+            <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+            设置
+          </button>
+          <div class="mt-2 pt-2 border-t border-borderLight flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-highlight rounded-xl transition-colors">
+            <div class="w-8 h-8 rounded-full bg-borderLight flex items-center justify-center text-sm">U</div>
+            <div class="flex-1 min-w-0">
+              <div class="text-sm font-medium truncate">User</div>
+              <div class="text-xs text-gray-500 truncate">user@example.com</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <main class="flex-1 flex flex-col min-w-0 bg-bgMain relative transition-all duration-300">
+      <header class="h-14 flex items-center justify-between px-4 flex-shrink-0">
+        <div class="flex items-center gap-3 overflow-hidden">
+          <button @click="sidebarOpen = !sidebarOpen" class="p-2 rounded-xl hover:bg-highlight transition-colors flex-shrink-0 text-gray-600">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path></svg>
+          </button>
+          <div class="text-sm text-gray-600 truncate font-medium flex items-center gap-2">
+            <template v-if="currentView === 'overview'">
+              {{ randomQuote }}
+            </template>
+            <template v-else-if="currentView === 'subject'">
+              {{ currentSubject.name }}
+            </template>
+            <template v-else-if="currentView === 'chat'">
+              <span class="text-gray-400 cursor-pointer hover:text-gray-800" @click="goSubjectDetail">{{ truncate(currentSubject.name, 8) }}</span>
+              <span class="text-gray-400">/</span>
+              <span class="text-gray-800">{{ truncate(currentChat.title, 15) }}</span>
+            </template>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <button v-if="currentView === 'chat'" @click="goSubjectDetail" class="p-2 rounded-xl hover:bg-highlight transition-colors text-gray-600 flex items-center gap-1 text-sm border border-transparent hover:border-borderLight">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+            <span class="hidden sm:inline">新建对话</span>
+          </button>
+        </div>
+      </header>
+
+      <div class="flex-1 overflow-hidden relative">
+        <!-- 1. 科目总览界面 -->
+        <div v-if="currentView === 'overview'" class="absolute inset-0 overflow-y-auto p-4 md:p-8 lg:px-24 flex flex-col">
+          <div class="flex-1 flex flex-col justify-center max-w-5xl mx-auto w-full">
+            <h1 class="text-4xl md:text-5xl font-bold mb-10 tracking-tight">科目总览</h1>
+            <div class="flex overflow-x-auto pb-2 -mx-4 px-4 md:mx-0 md:px-0 gap-4 snap-x no-scrollbar">
+              <div v-for="subject in subjects" :key="subject.id" @click="goToSubject(subject)" class="wire-card min-w-[280px] w-[280px] h-[160px] flex-shrink-0 snap-start flex flex-col justify-between">
+                <div>
+                  <h3 class="font-bold text-lg mb-2">{{ subject.name }}</h3>
+                  <p class="text-sm text-gray-500 line-clamp-2">{{ subject.desc }}</p>
+                </div>
+                <div class="text-xs text-gray-400 border-t border-borderLight pt-3 flex justify-between">
+                  <span>{{ subject.chats.length }} 个会话</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="max-w-4xl mx-auto w-full pb-2">
+            <div class="relative bg-white rounded-2xl border border-borderDark p-4 shadow-sm flex flex-col gap-3 transition-shadow focus-within:ring-2 focus-within:ring-highlight">
+              <textarea v-model="newSubjectName" @keydown.enter.prevent="createSubject" rows="1" placeholder="新建科目：输入科目名称与概览..." class="w-full bg-transparent border-none outline-none text-gray-800 resize-none overflow-y-auto leading-normal placeholder-gray-400 min-h-[24px]"></textarea>
+              <div class="flex justify-between items-center">
+                <div class="flex items-center -ml-2 gap-1">
+                  <button class="p-2 text-gray-400 hover:text-gray-800 rounded-lg hover:bg-highlight transition-colors" title="上传文件">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"></path></svg>
+                  </button>
+                  <button class="p-2 text-gray-400 hover:text-gray-800 rounded-lg hover:bg-highlight transition-colors" title="语音输入">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path></svg>
+                  </button>
+                </div>
+                <button @click="createSubject" :class="['p-2 rounded-lg transition-colors flex items-center justify-center -mr-1', newSubjectName.trim() ? 'bg-borderDark text-white hover:bg-gray-700' : 'bg-gray-100 text-gray-400 cursor-not-allowed']">
+                  <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 2. 科目概览界面 -->
+        <div v-if="currentView === 'subject'" class="absolute inset-0 overflow-y-auto p-4 md:p-8 flex flex-col">
+          <div class="max-w-4xl mx-auto w-full flex-1 flex flex-col">
+            <div class="mb-8">
+              <h2 class="text-3xl font-bold mb-2">{{ currentSubject.name }}</h2>
+              <p class="text-gray-500 text-sm">{{ currentSubject.desc }}</p>
+            </div>
+            <div class="text-sm text-gray-500 font-medium mb-4 border-b border-borderLight pb-2">历史会话</div>
+            <div class="space-y-3 overflow-y-auto flex-1 no-scrollbar mb-6">
+              <button v-for="chat in currentSubject.chats" :key="chat.id" @click="goToChat(chat)" class="w-full text-left bg-white border border-borderLight rounded-2xl p-4 hover:border-borderDark transition-colors flex justify-between items-center group">
+                <div class="truncate pr-4 flex-1">
+                  <div class="font-medium text-gray-800">{{ chat.title }}</div>
+                  <div class="text-xs text-gray-400 mt-1 truncate">{{ chat.messages[chat.messages.length-1]?.content || '空会话' }}</div>
+                </div>
+                <div class="text-gray-300 group-hover:text-gray-800 transition-colors">
+                  <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                </div>
+              </button>
+              <div v-if="currentSubject.chats.length === 0" class="text-center text-gray-400 py-10 border border-dashed border-borderLight rounded-2xl">
+                暂无会话，在下方输入以开始。
+              </div>
+            </div>
+            <div class="w-full pb-2 mt-auto">
+              <div class="relative bg-white rounded-2xl border border-borderDark p-3 shadow-sm flex flex-col gap-2 transition-shadow focus-within:ring-2 focus-within:ring-highlight">
+                <textarea v-model="newChatMsg" @keydown.enter.prevent="startNewChat" rows="1" placeholder="在这个科目中新建会话... (Enter 发送)" class="w-full bg-transparent border-none outline-none text-gray-800 resize-none max-h-32 overflow-y-auto leading-normal placeholder-gray-400"></textarea>
+                <div class="flex justify-between items-center">
+                  <div class="flex items-center -ml-2 gap-1">
+                    <button class="p-2 text-gray-400 hover:text-gray-800 rounded-lg hover:bg-highlight transition-colors" title="上传文件">
+                      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"></path></svg>
+                    </button>
+                    <button class="p-2 text-gray-400 hover:text-gray-800 rounded-lg hover:bg-highlight transition-colors" title="语音输入">
+                      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path></svg>
+                    </button>
+                  </div>
+                  <button @click="startNewChat" :class="['p-2 rounded-lg transition-colors flex items-center justify-center -mr-1', newChatMsg.trim() ? 'bg-borderDark text-white hover:bg-gray-700' : 'bg-gray-100 text-gray-400 cursor-not-allowed']">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 3. 具体对话界面 -->
+        <div v-if="currentView === 'chat'" class="absolute inset-0 flex flex-col">
+          <div class="flex-1 overflow-y-auto p-4 md:p-6 scroll-smooth" id="chat-container">
+            <div class="max-w-3xl mx-auto space-y-6 pb-4">
+              <div v-for="(msg, index) in currentChat.messages" :key="index" class="flex flex-col">
+                <div v-if="msg.role === 'user'" class="flex justify-start w-full">
+                  <div class="max-w-[85%] bg-highlightUser border border-borderLight text-gray-800 px-5 py-3 rounded-2xl rounded-tl-sm text-[15px] leading-relaxed">
+                    {{ msg.content }}
+                  </div>
+                </div>
+                <div v-else class="flex justify-end w-full mt-6 mb-2">
+                  <div class="max-w-[85%] bg-white border border-borderDark text-gray-800 px-5 py-4 rounded-2xl rounded-tr-sm text-[15px] leading-relaxed relative group">
+                    <p class="whitespace-pre-wrap">{{ msg.content }}</p>
+                    <div class="absolute -bottom-8 right-0 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button @click="retryMessage(index)" class="p-1.5 text-gray-400 hover:text-gray-800 bg-bgMain rounded-lg border border-transparent hover:border-borderLight" title="重试">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                      </button>
+                      <button class="p-1.5 text-gray-400 hover:text-gray-800 bg-bgMain rounded-lg border border-transparent hover:border-borderLight" title="复制">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div v-if="isTyping" class="flex justify-end w-full mt-6">
+                <div class="bg-white border border-borderLight px-5 py-3 rounded-2xl rounded-tr-sm flex gap-1 items-center">
+                  <div class="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
+                  <div class="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style="animation-delay: 0.2s"></div>
+                  <div class="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style="animation-delay: 0.4s"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="w-full bg-bgMain pt-2 pb-2 px-4">
+            <div class="max-w-3xl mx-auto relative bg-white rounded-2xl border border-borderDark p-3 shadow-sm flex flex-col gap-2 transition-shadow focus-within:ring-2 focus-within:ring-highlight">
+              <textarea v-model="chatInput" @keydown.enter.prevent="sendMessage" rows="1" placeholder="给 Teachi 发送消息..." class="w-full bg-transparent border-none outline-none text-gray-800 resize-none max-h-32 overflow-y-auto leading-normal placeholder-gray-400"></textarea>
+              <div class="flex justify-between items-center">
+                <div class="flex items-center -ml-2 gap-1">
+                  <button class="p-2 text-gray-400 hover:text-gray-800 rounded-lg hover:bg-highlight transition-colors" title="上传附件">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"></path></svg>
+                  </button>
+                  <button class="p-2 text-gray-400 hover:text-gray-800 rounded-lg hover:bg-highlight transition-colors" title="语音输入">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path></svg>
+                  </button>
+                  <button class="p-2 text-gray-400 hover:text-gray-800 rounded-lg hover:bg-highlight transition-colors" title="更多工具">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v.01M12 12v.01M12 18v.01"></path></svg>
+                  </button>
+                </div>
+                <button @click="sendMessage" :class="['p-2 rounded-lg transition-colors flex items-center justify-center -mr-1', chatInput.trim() ? 'bg-borderDark text-white hover:bg-gray-700' : 'bg-gray-100 text-gray-400 cursor-not-allowed']">
+                  <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+                </button>
+              </div>
+            </div>
+            <div class="text-center text-[10px] text-gray-400 mt-2">Teachi 可能会犯错。请核查重要信息。</div>
+          </div>
+        </div>
+
+      </div>
+    </main>
+
+  </div>
+
+  <script>
+    const { createApp, ref, computed, nextTick, onMounted, onUnmounted } = Vue
+
+    createApp({
+      setup() {
+        const sidebarOpen = ref(true)
+        const windowWidth = ref(window.innerWidth)
+        const isMobile = computed(() => windowWidth.value < 768)
+
+        const handleResize = () => {
+          windowWidth.value = window.innerWidth
+          if (windowWidth.value < 768) {
+            sidebarOpen.value = false
+          } else {
+            sidebarOpen.value = true
+          }
+        }
+
+        onMounted(() => {
+          window.addEventListener('resize', handleResize)
+          handleResize()
+        })
+        onUnmounted(() => window.removeEventListener('resize', handleResize))
+
+        const subjects = ref([
+          { id: 1, name: '高等数学', desc: '微积分、线性代数、概率论综合学习记录。', chats: [
+            { id: 101, title: '泰勒公式的理解与推导', messages: [
+              { role: 'user', content: '你能帮我通俗地讲解一下泰勒公式吗？我总是记不住。' },
+              { role: 'ai', content: '当然可以。你可以把泰勒公式想象成一个“用简单的多项式去模仿复杂函数”的工具。\n\n打个比方，你要画一个人脸（复杂函数），第一笔画个圆（常数项），第二笔加上眼睛鼻子（一次项），第三笔加上表情（二次项）……画得笔画越多（阶数越高），就越像原图。\n\n核心思想是：在某一点上，让多项式的值、导数、二阶导数...都和原函数相等。' }
+            ]}
+          ]},
+          { id: 2, name: '大学物理', desc: '力学与电磁学基础。', chats: [] },
+          { id: 3, name: 'Vue 前端开发', desc: '组合式 API 与工程化实践。', chats: [] },
+          { id: 4, name: '英语口语练习', desc: '日常对话与雅思备考。', chats: [] },
+        ])
+
+        const previewSubjects = computed(() => subjects.value.slice(0, 10))
+
+        const currentView = ref('overview')
+        const currentSubject = ref(null)
+        const currentChat = ref(null)
+
+        const newSubjectName = ref('')
+        const newChatMsg = ref('')
+        const chatInput = ref('')
+        const isTyping = ref(false)
+
+        const randomQuotes = [
+          "今天你学了吗？",
+          "知识就是力量，少摸鱼多思考。",
+          "准备好迎接新的知识挑战了吗？",
+          "日拱一卒，功不唐捐。"
+        ]
+        const randomQuote = ref(randomQuotes[Math.floor(Math.random() * randomQuotes.length)])
+
+        const goHome = () => {
+          currentView.value = 'overview'
+          currentSubject.value = null
+          currentChat.value = null
+          if (isMobile.value) sidebarOpen.value = false
+          randomQuote.value = randomQuotes[Math.floor(Math.random() * randomQuotes.length)]
+        }
+
+        const goToSubject = (sub) => {
+          currentSubject.value = sub
+          currentView.value = 'subject'
+          currentChat.value = null
+          if (isMobile.value) sidebarOpen.value = false
+        }
+
+        const goSubjectDetail = () => {
+          if(currentSubject.value) {
+            currentView.value = 'subject'
+            currentChat.value = null
+          }
+        }
+
+        const goToChat = (chat) => {
+          currentChat.value = chat
+          currentView.value = 'chat'
+          scrollToBottom()
+        }
+
+        const createSubject = () => {
+          if (!newSubjectName.value.trim()) return
+          const newSub = {
+            id: Date.now(),
+            name: newSubjectName.value,
+            desc: '新建立的科目...',
+            chats: []
+          }
+          subjects.value.unshift(newSub)
+          newSubjectName.value = ''
+          goToSubject(newSub)
+        }
+
+        const startNewChat = () => {
+          if (!newChatMsg.value.trim()) return
+          const newC = {
+            id: Date.now(),
+            title: newChatMsg.value.substring(0, 15) + '...',
+            messages: [
+              { role: 'user', content: newChatMsg.value }
+            ]
+          }
+          currentSubject.value.chats.unshift(newC)
+          newChatMsg.value = ''
+          goToChat(newC)
+          simulateAIResponse("这是一个新的会话，我已准备好在【" + currentSubject.value.name + "】下帮助您。")
+        }
+
+        const sendMessage = () => {
+          if (!chatInput.value.trim() || isTyping.value) return
+          currentChat.value.messages.push({
+            role: 'user',
+            content: chatInput.value
+          })
+          chatInput.value = ''
+          scrollToBottom()
+          simulateAIResponse("收到，这是一个线框风格演示，我是您的 AI 助教 Teachi。")
+        }
+
+        const retryMessage = (index) => {
+          if (isTyping.value) return;
+          const userMsgIndex = index - 1;
+          if(userMsgIndex >= 0 && currentChat.value.messages[userMsgIndex].role === 'user') {
+             currentChat.value.messages.splice(index);
+             simulateAIResponse("这是重试后生成的内容。请问还有什么疑问？");
+          }
+        }
+
+        const simulateAIResponse = (text) => {
+          isTyping.value = true
+          scrollToBottom()
+          setTimeout(() => {
+            isTyping.value = false
+            currentChat.value.messages.push({
+              role: 'ai',
+              content: text
+            })
+            scrollToBottom()
+          }, 1500)
+        }
+
+        const scrollToBottom = () => {
+          nextTick(() => {
+            const container = document.getElementById('chat-container')
+            if (container) {
+              container.scrollTop = container.scrollHeight
+            }
+          })
+        }
+
+        const truncate = (str, len) => {
+          if (!str) return ''
+          return str.length > len ? str.substring(0, len) + '...' : str
+        }
+
+        return {
+          sidebarOpen, isMobile,
+          subjects, previewSubjects,
+          currentView, currentSubject, currentChat,
+          randomQuote,
+          newSubjectName, newChatMsg, chatInput, isTyping,
+          goHome, goToSubject, goSubjectDetail, goToChat,
+          createSubject, startNewChat, sendMessage, retryMessage,
+          truncate
+        }
+      }
+    }).mount('#app')
+  </script>
+</body>
+</html>
