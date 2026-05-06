@@ -26,8 +26,14 @@ MODEL_PROVIDER_API_KEY = os.getenv("MODEL_PROVIDER_API_KEY", "")
 MODEL_BASE_URL = os.getenv("MODEL_BASE_URL", "")
 MODEL_NAME = os.getenv("MODEL_NAME", "")
 
+# CORS 配置，允许前端跨域访问
+CORS_ALLOW_ORIGINS = os.getenv(
+    "CORS_ALLOW_ORIGINS",
+    ""
+).split(",")
 
-def get_chat_model() -> OpenAIChatModel:
+
+def GetProvider() -> OpenAIChatModel:
     """构建聊天模型实例。"""
     if not MODEL_PROVIDER_API_KEY:
         raise RuntimeError(
@@ -44,14 +50,16 @@ def get_chat_model() -> OpenAIChatModel:
     )
 
 
-def create_chat_agent(
+def GetAgent(
     instructions: str | None = None,
     tools: list | None = None,
-) -> Agent[ChatDeps,str]:
-    """创建一个可复用的 Pydantic AI Agent。使用函数来实现复用。目前仍是每次调用都创建新实例，并在新实例中注入工具。后续可改为单例模式或工厂模式以提升性能。"""
+    capabilities: list | None = None,
+) -> Agent[ChatDeps, str]:
+    """创建一个可复用的 Pydantic AI Agent。每次调用都创建新实例，注入工具和能力。"""
     return Agent(
-        get_chat_model(),
+        GetProvider(),
         instructions=instructions or "你是一个智能助手",
         tools=tools or [],
-        deps_type=ChatDeps
+        capabilities=capabilities or [],
+        deps_type=ChatDeps,
     )

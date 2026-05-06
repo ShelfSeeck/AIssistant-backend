@@ -97,29 +97,6 @@ def build_tools(allowed: list[str] | None = None) -> list[Tool[Any]]:
 # 注意：
 # 1. 工具函数的第一个参数必须是 RunContext（Pydantic AI 要求）
 # 2. 这里使用 RunContext[Any] 避免循环导入，实际类型是 RunContext[ChatDeps]
-# 3. 运行时权限与安全校验由本模块的 _create_guarded_tool 保证
-# 4. 工具必须带有说明，只要在修饰器修饰的那个函数做好""""""的注释即可，可以把参数和目的写好点
+# 3. 工具必须带有说明，只要在修饰器修饰的那个函数做好""""""的注释即可，可以把参数和目的写好点
 # ============================================================
 
-@register_tool
-def file_operation(
-    ctx: RunContext[Any],
-    scope: str,
-    method: str,
-    args: dict
-) -> dict[str, Any]:
-    """
-    执行文件系统操作（项目文件或个人用户文件）。
-    
-    参数:
-    - scope: 操作范围。可选值为 "project" (操作当前项目文件夹内容) 或 "user" (操作用户个人空间内容)
-    - method: 操作方法名 (create_file, delete_file, create_dir, delete_dir, read_file, search_dir)
-    - args: 传给该方法的字典参数。例如 {"path": "test.txt", "content": "hello"}
-    """
-    from backend.file import filesystem_tool_handler
-    
-    deps = ctx.deps
-    pid = getattr(deps, "pid", None) if scope == "project" else None
-    user_uuid = getattr(deps, "user_uuid", None)
-    
-    return filesystem_tool_handler(ctx, method, args, pid=pid, user_uuid=user_uuid)

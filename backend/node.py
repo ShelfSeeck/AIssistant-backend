@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import datetime
 from typing import Any
-
+from pathlib import Path
 from pydantic import TypeAdapter
 from pydantic_ai import AgentRunResultEvent
 from pydantic_ai.messages import (
@@ -38,7 +38,8 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from backend.config import DATABASE_PATH, create_chat_agent
+from backend.config import DATABASE_PATH, GetAgent, BASE_DIR
+from pydantic_ai_skills import SkillsCapability
 from backend.context import (
     ActionKind,
     ChatDeps,
@@ -211,7 +212,22 @@ async def call_model_node(ctx: LoopContext) -> NodeOutput:
         tool_mode=ToolMode.ON,
     )
 
-    agent = create_chat_agent()
+    # 构建技能目录列表：全局 + 项目 + 用户，复用 File 门面的鉴权与路径计算
+    from backend.file import UserFile, ProjectFile
+    db = DatabaseFacade(DATABASE_PATH)
+
+    global_skills = BASE_DIR / "skills"  # data/skills
+    user_fs = UserFile(user_uuid=ctx.user_uuid, db_facade=db)
+    project_fs = ProjectFile(pid=ctx.pid, user_uuid=ctx.user_uuid, db_facade=db)
+
+    skill_dirs = [
+        str(global_skills),
+        str(project_fs.base_path / "skills"),
+        str(user_fs.base_path / "skills"),
+    ]
+    skills_capability = SkillsCapability(directories=skill_dirs, validate=True, max_depth=3)
+
+    agent = GetAgent(capabilities=[skills_capability])
     ctx.response_text = ""
     # 新一轮调用开始，清除上一轮的临时错误状态
     ctx.error = None
