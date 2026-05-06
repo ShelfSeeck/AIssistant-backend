@@ -7,6 +7,11 @@ class FileError(Exception):
     """文件操作基本错误类"""
     pass
 
+# 文件操作方法白名单，供 File_Handler 和 Skill_Handler 使用
+_ALLOWED_FS_METHODS: set[str] = {
+    "create_file", "delete_file", "create_dir", "delete_dir", "read_file", "search_dir",
+}
+
 class FileBase:
     """
     文件系统 Facade 基类。
@@ -19,10 +24,9 @@ class FileBase:
 
     def _safe_path(self, relative_path: str) -> Path:
         """安全路径转换，防止路径穿越攻击。"""
-        # 移除开头的斜杠或反斜杠，确保是相对路径
         clean_rel = relative_path.lstrip("/\\")
         target_path = (self.base_path / clean_rel).resolve()
-        
+
         if not str(target_path).startswith(str(self.base_path)):
             raise FileError(f"Access denied: Path {relative_path} is outside base directory.")
         return target_path
@@ -84,7 +88,7 @@ class FileBase:
             target = self._safe_path(path)
             if not target.is_dir():
                 raise FileError(f"Directory not found: {path}")
-            
+
             results = []
             for item in target.iterdir():
                 results.append({
@@ -101,12 +105,10 @@ class ProjectFile(FileBase):
     项目文件子类，限制在 /projects/{pid}。
     """
     def __init__(self, pid: str, user_uuid: str, db_facade):
-        # 鉴权：检查该项目是否属于该用户
         project = db_facade.projects.get_for_user(pid=pid, user_uuid=user_uuid)
         if not project:
             raise PermissionError(f"Access Denied: Project {pid} does not belong to user {user_uuid}")
-        
-        # 确定物理路径
+
         root_dir = Path(__file__).parent.resolve()
         project_path = root_dir / "projects" / pid
         super().__init__(project_path)
@@ -116,21 +118,20 @@ class UserFile(FileBase):
     用户文件子类，限制在 /users/{user_uuid}。
     """
     def __init__(self, user_uuid: str, db_facade):
-        # 鉴权：简单检查用户是否存在（或由 auth 层已完成的核心校验）
         user = db_facade.users.get_by_uuid(user_uuid)
         if not user:
             raise PermissionError(f"Access Denied: User {user_uuid} not found")
-        
-        # 确定物理路径
+
         root_dir = Path(__file__).parent.resolve()
         user_path = root_dir / "users" / user_uuid
         super().__init__(user_path)
 
-def filesystem_tool_handler(
-    ctx, 
-    method: str, 
-    args: dict, 
-    pid: Optional[str] = None, 
+
+
+def File_Handler(
+    method: str,
+    args: dict,
+    pid: Optional[str] = None,
     user_uuid: Optional[str] = None
 ) -> dict:
     """
@@ -152,10 +153,10 @@ def filesystem_tool_handler(
             return {"error": "identity_context_missing"}
 
         # 调用方法映射
-        func = getattr(fs, method, None)
-        if not func or method.startswith("_"):
+        if method not in _ALLOWED_FS_METHODS:
             return {"error": f"invalid_method: {method}"}
-        
+        func = getattr(fs, method)
+
         result = func(**args)
         return {"status": "success", "result": result}
 
