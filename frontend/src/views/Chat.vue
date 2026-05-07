@@ -3,22 +3,22 @@
 
     <!-- 消息列表 -->
     <div class="flex-1 overflow-y-auto p-4 md:p-6 scroll-smooth" ref="chatContainer">
-      <div class="max-w-3xl mx-auto space-y-6 pb-4">
+      <div class="max-w-3xl mx-auto space-y-3 pb-4">
         <div
           v-for="(msg, index) in chatStore.messages"
           :key="msg.id"
           class="flex flex-col"
         >
-          <!-- 用户消息 -->
-          <div v-if="msg.role === 'user'" class="flex justify-start w-full">
-            <div class="max-w-[85%] bg-highlightUser border border-borderLight text-gray-800 px-5 py-3 rounded-2xl rounded-tl-sm text-[15px] leading-relaxed">
+          <!-- 用户消息 - 右边 -->
+          <div v-if="msg.role === 'user'" class="flex justify-end w-full">
+            <div class="max-w-[85%] bg-highlightUser border border-borderLight text-gray-800 px-5 py-3 rounded-2xl rounded-tr-sm text-[15px] leading-relaxed">
               {{ msg.content }}
             </div>
           </div>
 
-          <!-- AI 消息 -->
-          <div v-else class="flex justify-end w-full mt-6 mb-2">
-            <div class="max-w-[85%] bg-white border border-borderDark text-gray-800 px-5 py-4 rounded-2xl rounded-tr-sm text-[15px] leading-relaxed relative group">
+          <!-- AI 消息 - 左边 -->
+          <div v-else class="flex justify-start w-full">
+            <div class="max-w-[85%] bg-white border border-borderDark text-gray-800 px-5 py-4 rounded-2xl rounded-tl-sm text-[15px] leading-relaxed relative group">
               <p class="whitespace-pre-wrap">{{ msg.content }}</p>
               <div class="absolute -bottom-8 right-0 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                 <button
@@ -43,9 +43,9 @@
           </div>
         </div>
 
-        <!-- 输入中指示器 -->
-        <div v-if="chatStore.isTyping" class="flex justify-end w-full mt-6">
-          <div class="bg-white border border-borderLight px-5 py-3 rounded-2xl rounded-tr-sm flex gap-1 items-center">
+        <!-- 输入中指示器 - 左边 -->
+        <div v-if="chatStore.isTyping" class="flex justify-start w-full">
+          <div class="bg-white border border-borderLight px-5 py-3 rounded-2xl rounded-tl-sm flex gap-1 items-center">
             <div class="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
             <div class="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style="animation-delay: 0.2s"></div>
             <div class="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style="animation-delay: 0.4s"></div>
@@ -58,22 +58,12 @@
     <div class="w-full bg-bgMain pt-2 pb-2 px-4">
       <div class="max-w-3xl mx-auto">
         <ChatInput
+          ref="chatInputRef"
           v-model="chatInput"
           placeholder="给 Teachi 发送消息..."
           :disabled="chatStore.isTyping"
           @send="sendMessage"
-        >
-          <template #extra-tools>
-            <button
-              class="p-2 text-gray-400 hover:text-gray-800 rounded-lg hover:bg-highlight transition-colors"
-              title="更多工具"
-            >
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v.01M12 12v.01M12 18v.01"></path>
-              </svg>
-            </button>
-          </template>
-        </ChatInput>
+        />
         <div class="text-center text-[10px] text-gray-400 mt-2">
           Teachi 可能会犯错。请核查重要信息。
         </div>
@@ -92,6 +82,7 @@ const route = useRoute()
 const subjectStore = useSubjectStore()
 const chatStore = useChatStore()
 
+const chatInputRef = ref<{ resetHeight: () => void }>()
 const chatInput = ref('')
 const chatContainer = ref<HTMLElement>()
 
@@ -126,6 +117,9 @@ async function sendMessage(content: string) {
   if (!content.trim() || chatStore.isTyping) return
 
   chatInput.value = ''
+  // 重置输入框高度
+  chatInputRef.value?.resetHeight()
+
   await chatStore.sendMessage(content)
   scrollToBottom()
 }
